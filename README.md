@@ -13,6 +13,7 @@
 - 시간, 클릭 수, 점수, 칭호 기록
 - 클릭 우선, 시간 우선, 점수 우선 로컬 랭킹
 - 이동 경로 그래프와 결과 공유 문구/이미지 생성
+- 메인화면 복귀, 이전 문서 이동, 문서 내 찾기와 링크 이동
 - 데스크톱/모바일 반응형 UI
 - Electron 기반 Windows EXE 패키징
 
@@ -63,10 +64,17 @@ npm run dist:win
 
 빌드가 끝나면 아래 파일이 생성됩니다.
 
-- `release/WikiSpeedRun-0.1.0-portable.exe`
+- `release/WikiSpeedRun-0.1.1-portable.exe`
 - `release/WikiSpeedRun-win32-x64/WikiSpeedRun.exe`
 
 portable EXE 하나만 실행해도 내부 Node 서버와 Electron 창이 함께 실행됩니다.
+
+## 조작
+
+- `이전 문서`: 현재 판의 이동 기록에서 한 단계 뒤로 이동합니다.
+- `메인화면`: 진행 중인 판을 나가고 대기실로 돌아갑니다.
+- `Ctrl+F` 또는 `Ctrl+F5`: 현재 문서 안에서 텍스트를 찾습니다.
+- 찾기 결과가 본문 링크일 때 `링크 이동`으로 해당 문서로 바로 이동할 수 있습니다.
 
 ## API
 

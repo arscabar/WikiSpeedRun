@@ -55,13 +55,9 @@ async function createMainWindow() {
 
   mainWindow.webContents.on("before-input-event", (event, input) => {
     const key = input.key.toLowerCase();
-    const isBlockedNavigation =
-      (input.alt && (key === "left" || key === "right")) ||
-      (input.control && (key === "l" || key === "r")) ||
-      key === "browserback" ||
-      key === "browserforward";
+    const isBlockedAddressShortcut = input.control && key === "l";
 
-    if (isBlockedNavigation) {
+    if (isBlockedAddressShortcut) {
       event.preventDefault();
     }
   });

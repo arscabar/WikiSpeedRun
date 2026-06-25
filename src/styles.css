@@ -368,6 +368,13 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(0, 164, 149, 0.36);
+  outline-offset: 2px;
+}
+
 .controlRail,
 .raceRail,
 .browserZone,
@@ -712,7 +719,7 @@ code {
 
 .browserChrome {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid var(--track-border);
@@ -782,6 +789,64 @@ code {
 .iconButton:hover {
   border-color: var(--track-amber);
   color: var(--track-amber);
+}
+
+.iconButton.compact {
+  width: 40px;
+  height: 40px;
+}
+
+.findBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid var(--track-border);
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.findBar > svg {
+  color: var(--track-amber);
+}
+
+.findBar input {
+  flex: 1 1 220px;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  color: var(--track-paper);
+  font-weight: 700;
+}
+
+.findBar output {
+  min-width: 58px;
+  color: var(--track-muted);
+  font-family: "JetBrains Mono", monospace;
+  text-align: center;
+}
+
+.findGoButton {
+  min-height: 40px;
+  border: 1px solid var(--track-amber);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  background: transparent;
+  color: var(--track-amber);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.findGoButton:hover {
+  background: var(--track-amber);
+  color: #ffffff;
+}
+
+.findGoButton:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .wikiArticle {
@@ -890,6 +955,20 @@ code {
 .articleLink:disabled {
   color: #6d7480;
   cursor: not-allowed;
+}
+
+.findMatch {
+  scroll-margin-top: 132px;
+  border-radius: 4px;
+  padding: 0 2px;
+  background: #fff1a8;
+  color: inherit;
+}
+
+.findMatch.active {
+  background: var(--track-amber);
+  color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(0, 164, 149, 0.18);
 }
 
 .browserPlaceholder {
@@ -1369,11 +1448,25 @@ code {
   }
 
   .browserChrome {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
   }
 
   .windowControls {
     display: none;
+  }
+
+  .findBar {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .findBar input {
+    flex-basis: 150px;
+  }
+
+  .findGoButton {
+    flex: 1 1 100%;
   }
 
   .wikiArticle {

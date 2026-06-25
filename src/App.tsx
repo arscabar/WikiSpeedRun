@@ -1,17 +1,21 @@
 import {
   AlertTriangle,
+  ArrowLeft,
   Award,
-  Ban,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Copy,
   Eye,
   Flag,
   GitBranch,
+  Home,
   ImageDown,
   LoaderCircle,
   LockKeyhole,
   MousePointerClick,
   Radio,
+  Search,
   RotateCcw,
   SearchX,
   Settings2,
@@ -23,9 +27,10 @@ import {
   Trophy,
   UserRound,
   Users,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "daily" | "infinite" | "room";
 
@@ -83,9 +88,30 @@ type CompletionRecord = {
   path: string[];
 };
 
+type FindPart = {
+  text: string;
+  matchIndex: number | null;
+};
+
+type RenderSegment = Segment & {
+  parts: FindPart[];
+};
+
+type RenderBlock =
+  | {
+      type: "heading";
+      text: string;
+      parts: FindPart[];
+    }
+  | {
+      type: "paragraph";
+      segments: RenderSegment[];
+    };
+
 const fairnessItems = [
-  { icon: SearchX, label: "검색 잠금", state: "LOCK" },
-  { icon: Ban, label: "뒤로가기 차단", state: "ARM" },
+  { icon: SearchX, label: "주소 검색 잠금", state: "LOCK" },
+  { icon: ArrowLeft, label: "뒤로가기 허용", state: "ON" },
+  { icon: Search, label: "본문 찾기", state: "ON" },
   { icon: LockKeyhole, label: "URL 봉인", state: "ON" },
 ];
 
@@ -224,6 +250,24 @@ function getChallengeOverrideParams() {
   return `&start=${encodeURIComponent(start)}&target=${encodeURIComponent(target)}`;
 }
 
+function renderFindParts(parts: FindPart[], activeFindIndex: number) {
+  return parts.map((part, index) => {
+    if (part.matchIndex === null) {
+      return <span key={`text-${index}`}>{part.text}</span>;
+    }
+
+    return (
+      <mark
+        className={part.matchIndex === activeFindIndex ? "findMatch active" : "findMatch"}
+        data-find-index={part.matchIndex}
+        key={`match-${part.matchIndex}-${index}`}
+      >
+        {part.text}
+      </mark>
+    );
+  });
+}
+
 function App() {
   const [mode, setMode] = useState<Mode>("daily");
   const [playerName, setPlayerName] = useState(() => localStorage.getItem("wsr.playerName") ?? "PlayerA");
@@ -244,6 +288,10 @@ function App() {
   const [shareState, setShareState] = useState("대기");
   const [shareText, setShareText] = useState("");
   const [resultImageUrl, setResultImageUrl] = useState("");
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [activeFindIndex, setActiveFindIndex] = useState(-1);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
 
   const isComplete = Boolean(challenge && currentTitle === challenge.target);
   const clicks = Math.max(0, history.length - 1);
@@ -253,6 +301,84 @@ function App() {
     ? records.find((record) => record.start === challenge.start && record.target === challenge.target)
     : undefined;
   const roomCode = "WIKI-4827";
+  const normalizedFindQuery = findQuery.trim();
+
+  const findResult = useMemo(() => {
+    if (!article) {
+      return { blocks: [] as RenderBlock[], matchCount: 0, targets: [] as Array<string | null> };
+    }
+
+    const query = normalizedFindQuery.toLocaleLowerCase("ko-KR");
+    const targets: Array<string | null> = [];
+    let matchCount = 0;
+
+    const createParts = (value: string, target: string | null = null) => {
+      if (!query) {
+        return [{ text: value, matchIndex: null }] satisfies FindPart[];
+      }
+
+      const lowerValue = value.toLocaleLowerCase("ko-KR");
+      const parts: FindPart[] = [];
+      let cursor = 0;
+
+      while (cursor < value.length) {
+        const index = lowerValue.indexOf(query, cursor);
+        if (index === -1) {
+          parts.push({ text: value.slice(cursor), matchIndex: null });
+          break;
+        }
+
+        if (index > cursor) {
+          parts.push({ text: value.slice(cursor, index), matchIndex: null });
+        }
+
+        parts.push({ text: value.slice(index, index + query.length), matchIndex: matchCount });
+        targets[matchCount] = target;
+        matchCount += 1;
+        cursor = index + query.length;
+      }
+
+      return parts.filter((part) => part.text.length > 0);
+    };
+
+    const blocks: RenderBlock[] = article.blocks.map((block) => {
+      if (block.type === "heading") {
+        return { ...block, parts: createParts(block.text) };
+      }
+
+      return {
+        ...block,
+        segments: block.segments.map((segment) => ({
+          ...segment,
+          parts: createParts(segment.kind === "text" ? segment.value : segment.label, segment.kind === "link" ? segment.to : null),
+        })),
+      };
+    });
+
+    return { blocks, matchCount, targets };
+  }, [article, normalizedFindQuery]);
+
+  const activeFindTarget = activeFindIndex >= 0 ? findResult.targets[activeFindIndex] : null;
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    setShareState("문서 찾기");
+  }, []);
+
+  const moveFindResult = useCallback(
+    (direction: 1 | -1) => {
+      if (findResult.matchCount === 0) {
+        setActiveFindIndex(-1);
+        return;
+      }
+
+      setActiveFindIndex((index) => {
+        const currentIndex = index < 0 ? 0 : index;
+        return (currentIndex + direction + findResult.matchCount) % findResult.matchCount;
+      });
+    },
+    [findResult.matchCount],
+  );
 
   const loadArticle = useCallback(async (title: string) => {
     return readJson<ApiArticle>(`/api/article?title=${encodeURIComponent(title)}`);
@@ -278,7 +404,10 @@ function App() {
         setElapsedMs(0);
         setShareText("");
         setResultImageUrl("");
+        setFindQuery("");
+        setActiveFindIndex(-1);
         setShareState("제시어 자동 설정됨");
+        window.history.replaceState({ view: "race", title: nextChallenge.start }, "", window.location.href);
         window.setTimeout(() => setShareState("대기"), 1400);
       } catch (challengeError) {
         setError(challengeError instanceof Error ? challengeError.message : String(challengeError));
@@ -303,15 +432,61 @@ function App() {
   }, [challenge, isComplete, isEntered, isLoading, startedAt]);
 
   useEffect(() => {
-    const blockHistory = () => {
-      window.history.pushState(null, "", window.location.href);
+    if (!findOpen) {
+      return;
+    }
+
+    window.setTimeout(() => findInputRef.current?.focus(), 0);
+  }, [findOpen]);
+
+  useEffect(() => {
+    if (!normalizedFindQuery || findResult.matchCount === 0) {
+      setActiveFindIndex(-1);
+      return;
+    }
+
+    setActiveFindIndex(0);
+  }, [currentTitle, findResult.matchCount, normalizedFindQuery]);
+
+  useEffect(() => {
+    if (activeFindIndex < 0) {
+      return;
+    }
+
+    const activeElement = document.querySelector(`[data-find-index="${activeFindIndex}"]`);
+    activeElement?.scrollIntoView({ block: "center", inline: "nearest" });
+  }, [activeFindIndex]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const isFindShortcut = (event.ctrlKey || event.metaKey) && (key === "f" || event.key === "F5");
+
+      if (isFindShortcut && isEntered) {
+        event.preventDefault();
+        openFind();
+        return;
+      }
+
+      if (!findOpen) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setFindOpen(false);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        moveFindResult(event.shiftKey ? -1 : 1);
+      }
     };
 
-    window.history.pushState(null, "", window.location.href);
-    window.addEventListener("popstate", blockHistory);
-
-    return () => window.removeEventListener("popstate", blockHistory);
-  }, []);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [findOpen, isEntered, moveFindResult, openFind]);
 
   const racePlayers = useMemo(
     () => [
@@ -407,6 +582,23 @@ function App() {
     localStorage.setItem("wsr.rankingMode", nextMode);
   };
 
+  const exitToMain = useCallback(() => {
+    setIsEntered(false);
+    setChallenge(null);
+    setArticle(null);
+    setCurrentTitle("");
+    setHistory([]);
+    setElapsedMs(0);
+    setError("");
+    setShareText("");
+    setResultImageUrl("");
+    setFindOpen(false);
+    setFindQuery("");
+    setActiveFindIndex(-1);
+    setShareState("대기");
+    window.history.replaceState({ view: "entry" }, "", window.location.href);
+  }, []);
+
   const resetCurrentChallenge = async () => {
     if (!challenge) {
       return;
@@ -424,7 +616,10 @@ function App() {
       setElapsedMs(0);
       setShareText("");
       setResultImageUrl("");
+      setFindQuery("");
+      setActiveFindIndex(-1);
       setShareState("현재 판 재시작");
+      window.history.replaceState({ view: "race", title: challenge.start }, "", window.location.href);
       window.setTimeout(() => setShareState("대기"), 1400);
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : String(resetError));
@@ -432,6 +627,35 @@ function App() {
       setIsLoading(false);
     }
   };
+
+  const goBackArticle = useCallback(async () => {
+    if (history.length <= 1 || isLoading || isNavigating) {
+      return;
+    }
+
+    const nextHistory = history.slice(0, -1);
+    const previousTitle = nextHistory[nextHistory.length - 1];
+
+    setIsNavigating(true);
+    setError("");
+
+    try {
+      const previousArticle = await loadArticle(previousTitle);
+      setArticle(previousArticle);
+      setCurrentTitle(previousTitle);
+      setHistory(nextHistory);
+      setShareText("");
+      setResultImageUrl("");
+      setFindQuery("");
+      setActiveFindIndex(-1);
+      setShareState("이전 문서");
+      window.setTimeout(() => setShareState("대기"), 1200);
+    } catch (backError) {
+      setError(backError instanceof Error ? backError.message : String(backError));
+    } finally {
+      setIsNavigating(false);
+    }
+  }, [history, isLoading, isNavigating, loadArticle]);
 
   const navigateToArticle = async (title: string) => {
     if (!article || !challenge || isComplete || isNavigating) {
@@ -460,6 +684,9 @@ function App() {
       setArticle(nextArticle);
       setCurrentTitle(title);
       setHistory(nextHistory);
+      setFindQuery("");
+      setActiveFindIndex(-1);
+      window.history.pushState({ view: "race", title }, "", window.location.href);
 
       if (title === challenge.target) {
         setElapsedMs(finalElapsedMs);
@@ -470,6 +697,34 @@ function App() {
     } finally {
       setIsNavigating(false);
     }
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (!isEntered) {
+        return;
+      }
+
+      if (history.length > 1) {
+        void goBackArticle();
+        return;
+      }
+
+      exitToMain();
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [exitToMain, goBackArticle, history.length, isEntered]);
+
+  const openActiveFindMatch = () => {
+    if (!activeFindTarget) {
+      setShareState("링크 결과 아님");
+      window.setTimeout(() => setShareState("대기"), 1200);
+      return;
+    }
+
+    void navigateToArticle(activeFindTarget);
   };
 
   const copyRoomCode = async () => {
@@ -733,6 +988,19 @@ function App() {
                 <RotateCcw aria-hidden="true" size={18} />
                 <span>현재 판 재시작</span>
               </button>
+              <button
+                className="ghostAction"
+                type="button"
+                disabled={history.length <= 1 || isLoading || isNavigating}
+                onClick={() => void goBackArticle()}
+              >
+                <ArrowLeft aria-hidden="true" size={18} />
+                <span>이전 문서</span>
+              </button>
+              <button className="ghostAction" type="button" onClick={exitToMain}>
+                <Home aria-hidden="true" size={18} />
+                <span>메인화면</span>
+              </button>
             </section>
 
             <section className="metricStack" aria-label="플레이어 HUD">
@@ -808,6 +1076,19 @@ function App() {
                 <RotateCcw aria-hidden="true" size={18} />
                 <span>재시작</span>
               </button>
+              <button
+                className="ghostAction"
+                type="button"
+                disabled={history.length <= 1 || isLoading || isNavigating}
+                onClick={() => void goBackArticle()}
+              >
+                <ArrowLeft aria-hidden="true" size={18} />
+                <span>이전</span>
+              </button>
+              <button className="ghostAction" type="button" onClick={exitToMain}>
+                <Home aria-hidden="true" size={18} />
+                <span>메인</span>
+              </button>
             </div>
           </section>
 
@@ -825,7 +1106,37 @@ function App() {
               <button className="iconButton" type="button" aria-label="현재 문서 관전 상태">
                 <Eye aria-hidden="true" size={19} />
               </button>
+              <button className="iconButton" type="button" aria-label="문서 내 찾기 열기" onClick={openFind}>
+                <Search aria-hidden="true" size={19} />
+              </button>
             </div>
+
+            {findOpen && (
+              <section className="findBar" aria-label="문서 내 찾기 도구">
+                <Search aria-hidden="true" size={18} />
+                <input
+                  ref={findInputRef}
+                  aria-label="문서 내 찾기"
+                  value={findQuery}
+                  onChange={(event) => setFindQuery(event.target.value)}
+                />
+                <output aria-label="찾기 결과">
+                  {findResult.matchCount > 0 && activeFindIndex >= 0 ? `${activeFindIndex + 1}/${findResult.matchCount}` : "0/0"}
+                </output>
+                <button className="iconButton compact" type="button" aria-label="이전 찾기 결과" onClick={() => moveFindResult(-1)}>
+                  <ChevronUp aria-hidden="true" size={18} />
+                </button>
+                <button className="iconButton compact" type="button" aria-label="다음 찾기 결과" onClick={() => moveFindResult(1)}>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </button>
+                <button className="findGoButton" type="button" disabled={!activeFindTarget || isComplete} onClick={openActiveFindMatch}>
+                  링크 이동
+                </button>
+                <button className="iconButton compact" type="button" aria-label="문서 내 찾기 닫기" onClick={() => setFindOpen(false)}>
+                  <X aria-hidden="true" size={18} />
+                </button>
+              </section>
+            )}
 
             {isComplete && (
               <section className="finishPanel" aria-label="결과">
@@ -902,16 +1213,16 @@ function App() {
                     ))}
                   </div>
                   <div className="articleBody">
-                    {article.blocks.map((block, blockIndex) =>
+                    {findResult.blocks.map((block, blockIndex) =>
                       block.type === "heading" ? (
                         <h3 className="articleHeading" key={`${block.text}-${blockIndex}`}>
-                          {block.text}
+                          {renderFindParts(block.parts, activeFindIndex)}
                         </h3>
                       ) : (
                         <p key={`${article.title}-${blockIndex}`}>
                           {block.segments.map((segment, segmentIndex) =>
                             segment.kind === "text" ? (
-                              <span key={`${segment.value}-${segmentIndex}`}>{segment.value}</span>
+                              <span key={`${segment.value}-${segmentIndex}`}>{renderFindParts(segment.parts, activeFindIndex)}</span>
                             ) : (
                               <button
                                 className="articleLink"
@@ -920,7 +1231,7 @@ function App() {
                                 disabled={isComplete || isNavigating}
                                 onClick={() => navigateToArticle(segment.to)}
                               >
-                                {segment.label}
+                                {renderFindParts(segment.parts, activeFindIndex)}
                               </button>
                             ),
                           )}

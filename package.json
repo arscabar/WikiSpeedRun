@@ -1,0 +1,60 @@
+{
+  "name": "wiki-speed-run",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "server": "node server/index.mjs",
+    "stress": "node scripts/stress-test.mjs",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "electron": "npm run build && electron electron/main.mjs",
+    "pack:win": "npm run build && node scripts/package-win.mjs",
+    "portable:win": "npm run pack:win && electron-builder --prepackaged release/WikiSpeedRun-win32-x64 --win portable --config.directories.output=release",
+    "dist:win": "npm run portable:win"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "local.wikispeedrun.app",
+    "productName": "WikiSpeedRun",
+    "artifactName": "${productName}-${version}-portable.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

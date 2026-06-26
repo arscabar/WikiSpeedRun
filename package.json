@@ -1,6 +1,6 @@
 {
   "name": "wiki-speed-run",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
@@ -10,10 +10,13 @@
     "stress": "node scripts/stress-test.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "cloudflare:quick": "npm run build && node scripts/cloudflare-quick.mjs",
     "electron": "npm run build && electron electron/main.mjs",
     "pack:win": "npm run build && node scripts/package-win.mjs",
     "portable:win": "npm run pack:win && electron-builder --prepackaged release/WikiSpeedRun-win32-x64 --win portable --config.directories.output=release",
-    "dist:win": "npm run portable:win"
+    "dist:win": "npm run portable:win",
+    "zip:cloudflare": "node scripts/package-cloudflare-zip.mjs",
+    "dist:cloudflare": "npm run dist:win && npm run zip:cloudflare"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

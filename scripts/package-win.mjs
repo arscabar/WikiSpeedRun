@@ -25,8 +25,8 @@ const appPaths = await packager({
   appVersion: packageJson.version,
   buildVersion: packageJson.version,
   ignore: [
-    /^\/(?:\.omx|data|docs|release|src)(?:\/|$)/,
-    /^\/(?:README\.md|tsconfig.*|vite\.config\..*|.*\.tsbuildinfo|package-lock\.json)$/,
+    /^\/(?:\.git|\.omx|\.tmp-test|cloudflare|data|docs|public|release|scripts|src)(?:\/|$)/,
+    /^\/(?:\.gitignore|config\.ya?ml|index\.html|README\.md|tsconfig.*|vite\.config\..*|.*\.tsbuildinfo|package-lock\.json)$/,
   ],
 });
 

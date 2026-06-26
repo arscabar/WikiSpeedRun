@@ -176,6 +176,10 @@ a:focus-visible {
   color: #008275;
 }
 
+.randomAllButton {
+  font-weight: 800;
+}
+
 .liveBadge {
   display: inline-flex;
   gap: 8px;
@@ -513,7 +517,7 @@ a:focus-visible {
 
 .mobileActions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -574,6 +578,11 @@ a:focus-visible {
   border-color: var(--track-border);
   background: transparent;
   color: var(--track-paper-soft);
+}
+
+.strongGhostAction {
+  border-color: var(--track-amber);
+  color: var(--track-amber);
 }
 
 .primaryAction:hover,
@@ -709,6 +718,15 @@ code {
 .historyList .current {
   border-left-color: var(--track-amber);
   color: var(--track-cyan);
+}
+
+.historyList .backStep {
+  border-left-color: #899197;
+  color: #6b7278;
+}
+
+.historyList .backStep span {
+  color: #6b7278;
 }
 
 .browserZone {
@@ -1043,6 +1061,31 @@ code {
   font-weight: 800;
 }
 
+.resultMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.resultMeta span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  background: #ffffff;
+  color: var(--track-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.resultMeta strong {
+  color: var(--track-cyan);
+}
+
 .finishActions {
   display: grid;
   grid-template-columns: repeat(2, minmax(132px, 1fr));
@@ -1183,41 +1226,78 @@ code {
 }
 
 .routeGraph {
+  display: block;
   width: 100%;
   min-height: 168px;
   margin-top: 8px;
 }
 
+.routeGraph.topDown {
+  overflow: visible;
+}
+
 .routeLine {
-  fill: none;
   stroke: var(--track-cyan);
   stroke-width: 4;
   stroke-linecap: square;
-  stroke-linejoin: bevel;
 }
 
-.routeNode {
-  fill: var(--track-panel);
+.routeLine.backLine {
+  stroke: #899197;
+  stroke-dasharray: 7 7;
+  stroke-width: 3;
+}
+
+.routeStepNumber {
+  fill: #ffffff;
   stroke: #8a949b;
   stroke-width: 3;
 }
 
-.targetNode {
+.routeStepNumber.targetStep {
   fill: var(--track-amber);
   stroke: #006f66;
-  stroke-width: 3;
 }
 
-.routeGraph text {
-  fill: var(--track-paper-soft);
+.routeStepNumber.backStep {
+  fill: #f1f3f5;
+  stroke: #899197;
+}
+
+.routeStepIndex,
+.routeActionLabel,
+.routeTitle {
   font-family:
     "Noto Sans KR",
     "Apple SD Gothic Neo",
     "Malgun Gothic",
     system-ui,
     sans-serif;
-  font-size: 18px;
   font-weight: 700;
+}
+
+.routeStepIndex {
+  fill: var(--track-paper);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 16px;
+}
+
+.routeStepIndex.targetStep {
+  fill: #ffffff;
+}
+
+.routeActionLabel {
+  fill: var(--track-cyan);
+  font-size: 15px;
+}
+
+.routeActionLabel.backStep {
+  fill: #6b7278;
+}
+
+.routeTitle {
+  fill: var(--track-paper-soft);
+  font-size: 18px;
 }
 
 .rankingModes {
@@ -1225,6 +1305,13 @@ code {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 14px;
+}
+
+.rankSession {
+  margin-top: 8px;
+  color: var(--track-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.74rem;
 }
 
 .rankingMode {

@@ -7,7 +7,6 @@ import {
   Clock3,
   Copy,
   Eye,
-  Flag,
   GitBranch,
   Home,
   ImageDown,
@@ -32,7 +31,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type Mode = "daily" | "infinite" | "room";
+type Mode = "casual" | "practice";
 
 type Segment =
   | {
@@ -75,17 +74,82 @@ type Challenge = {
 
 type RankingMode = "clicks" | "time" | "score";
 
+type RunMeta = {
+  mode: Mode;
+  allRandom: boolean;
+};
+
+type RouteStep = {
+  title: string;
+  action: "start" | "link" | "back";
+};
+
 type CompletionRecord = {
   id: string;
   playerName: string;
   start: string;
   target: string;
+  mode: Mode;
+  allRandom: boolean;
   clicks: number;
   elapsedMs: number;
   score: number;
-  title: string;
   completedAt: string;
   path: string[];
+  routeSteps?: RouteStep[];
+};
+
+type RankingResponse = {
+  accepted?: boolean;
+  reason?: string;
+  record?: CompletionRecord | null;
+  sessionStartedAt: string;
+  total: number;
+  records: CompletionRecord[];
+};
+
+type PlayerProfile = {
+  id: string;
+  name: string;
+  role: "host" | "player" | "spectator";
+  joinedAt: string;
+  lastSeenAt: string;
+  connected: boolean;
+};
+
+type PlayerResponse = {
+  player: PlayerProfile;
+  sessionStartedAt: string;
+};
+
+type ServerRun = {
+  id: string;
+  playerId: string;
+  playerName: string;
+  start: string;
+  target: string;
+  mode: Mode;
+  allRandom: boolean;
+  status: "running" | "finished";
+  currentTitle: string;
+  documentStack: string[];
+  routeSteps: RouteStep[];
+  startedAt: string;
+  finishedAt: string | null;
+  elapsedMs: number;
+  clicks: number;
+  score: number;
+  record: CompletionRecord | null;
+};
+
+type RunResponse = {
+  allowed?: boolean;
+  completed?: boolean;
+  from?: string;
+  to?: string;
+  run: ServerRun;
+  ranking?: RankingResponse;
+  sessionStartedAt?: string;
 };
 
 type FindPart = {
@@ -116,9 +180,19 @@ const fairnessItems = [
 ];
 
 const modeLabels: Record<Mode, string> = {
-  daily: "오늘의 도전",
-  infinite: "무한 모드",
-  room: "사설 방",
+  casual: "캐주얼",
+  practice: "연습",
+};
+
+const randomRunLabels = {
+  standard: "일반",
+  allRandom: "아예랜덤",
+};
+
+const routeActionLabels: Record<RouteStep["action"], string> = {
+  start: "시작",
+  link: "이동",
+  back: "뒤로",
 };
 
 const rankingModeLabels: Record<RankingMode, string> = {
@@ -162,28 +236,27 @@ function calculateScore(elapsedMs: number, clicks: number) {
   return Math.max(0, 100000 - clicks * 4000 - seconds * 35);
 }
 
-function getScoreTitle(score: number) {
-  if (score >= 90000) {
-    return "레전드 러너";
-  }
-  if (score >= 75000) {
-    return "스피드러너";
-  }
-  if (score >= 55000) {
-    return "루트 파인더";
-  }
-  if (score >= 30000) {
-    return "완주자";
-  }
-  return "기록 보존";
+function createRouteStepsFromTitles(titles: string[]) {
+  return titles.map((title, index) => ({
+    title,
+    action: index === 0 ? "start" : "link",
+  })) satisfies RouteStep[];
 }
 
-function readStoredRecords() {
-  try {
-    return JSON.parse(localStorage.getItem("wsr.records") ?? "[]") as CompletionRecord[];
-  } catch {
-    return [];
+function formatRouteStepLabel(step: RouteStep, index: number) {
+  if (index === 0) {
+    return step.title;
   }
+
+  return step.action === "back" ? `↩ ${step.title}` : step.title;
+}
+
+function formatNumberedRouteStep(step: RouteStep, index: number) {
+  return `${String(index + 1).padStart(2, "0")} ${routeActionLabels[step.action]} ${step.title}`;
+}
+
+function formatRouteSteps(steps: RouteStep[]) {
+  return steps.map(formatNumberedRouteStep).join(" → ");
 }
 
 function sortRecords(records: CompletionRecord[], rankingMode: RankingMode) {
@@ -269,17 +342,22 @@ function renderFindParts(parts: FindPart[], activeFindIndex: number) {
 }
 
 function App() {
-  const [mode, setMode] = useState<Mode>("daily");
+  const [mode, setMode] = useState<Mode>("casual");
+  const [playerId, setPlayerId] = useState(() => localStorage.getItem("wsr.playerId") ?? "");
   const [playerName, setPlayerName] = useState(() => localStorage.getItem("wsr.playerName") ?? "PlayerA");
   const [rankingMode, setRankingMode] = useState<RankingMode>(
     () => (localStorage.getItem("wsr.rankingMode") as RankingMode | null) ?? "clicks",
   );
-  const [records, setRecords] = useState<CompletionRecord[]>(readStoredRecords);
+  const [records, setRecords] = useState<CompletionRecord[]>([]);
+  const [rankingSessionStartedAt, setRankingSessionStartedAt] = useState("");
   const [isEntered, setIsEntered] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [article, setArticle] = useState<ApiArticle | null>(null);
+  const [runId, setRunId] = useState("");
   const [currentTitle, setCurrentTitle] = useState("");
   const [history, setHistory] = useState<string[]>([]);
+  const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
+  const [runMeta, setRunMeta] = useState<RunMeta>({ mode: "casual", allRandom: false });
   const [startedAt, setStartedAt] = useState(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -294,14 +372,15 @@ function App() {
   const findInputRef = useRef<HTMLInputElement | null>(null);
 
   const isComplete = Boolean(challenge && currentTitle === challenge.target);
-  const clicks = Math.max(0, history.length - 1);
+  const isPractice = runMeta.mode === "practice";
+  const clicks = Math.max(0, routeSteps.length - 1);
   const liveScore = calculateScore(elapsedMs, clicks);
-  const liveScoreTitle = getScoreTitle(liveScore);
-  const currentRecord = challenge
-    ? records.find((record) => record.start === challenge.start && record.target === challenge.target)
-    : undefined;
+  const resultScore = liveScore;
   const roomCode = "WIKI-4827";
   const normalizedFindQuery = findQuery.trim();
+  const runModeLabel = modeLabels[runMeta.mode];
+  const runRandomLabel = runMeta.allRandom ? randomRunLabels.allRandom : randomRunLabels.standard;
+  const routeTimeline = routeSteps.length > 0 ? formatRouteSteps(routeSteps) : history.join(" → ");
 
   const findResult = useMemo(() => {
     if (!article) {
@@ -380,33 +459,86 @@ function App() {
     [findResult.matchCount],
   );
 
+  const fetchRankings = useCallback(async () => {
+    const payload = await readJson<RankingResponse>("/api/rankings");
+    setRecords(payload.records);
+    setRankingSessionStartedAt(payload.sessionStartedAt);
+  }, []);
+
   const loadArticle = useCallback(async (title: string) => {
     return readJson<ApiArticle>(`/api/article?title=${encodeURIComponent(title)}`);
   }, []);
 
+  const applyServerRun = useCallback((run: ServerRun) => {
+    setRunId(run.id);
+    setCurrentTitle(run.currentTitle);
+    setHistory(run.documentStack);
+    setRouteSteps(run.routeSteps);
+
+    setStartedAt(Date.now() - run.elapsedMs);
+    setElapsedMs(run.elapsedMs);
+  }, []);
+
+  const ensurePlayer = useCallback(
+    async (nextPlayerName: string) => {
+      const payload = await readJson<PlayerResponse>("/api/players", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerId,
+          playerName: nextPlayerName,
+        }),
+      });
+
+      setPlayerId(payload.player.id);
+      localStorage.setItem("wsr.playerId", payload.player.id);
+      return payload.player.id;
+    },
+    [playerId],
+  );
+
+  const createServerRun = useCallback(
+    async (nextChallenge: Challenge, nextMode: Mode, allRandom: boolean, nextPlayerName: string) => {
+      const nextPlayerId = await ensurePlayer(nextPlayerName);
+      const payload = await readJson<RunResponse>("/api/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerId: nextPlayerId,
+          start: nextChallenge.start,
+          target: nextChallenge.target,
+          mode: nextMode,
+          allRandom,
+        }),
+      });
+
+      return payload.run;
+    },
+    [ensurePlayer],
+  );
+
   const startChallenge = useCallback(
-    async (nextMode: Mode, useOverride = false) => {
+    async (nextMode: Mode, useOverride = false, allRandom = false, nextPlayerName = playerName) => {
       setIsLoading(true);
       setError("");
-      setShareState("제시어 생성 중");
+      setShareState(allRandom ? "아예랜덤 생성 중" : "제시어 생성 중");
 
       try {
         const nextChallenge = await readJson<Challenge>(
-          `/api/challenge?mode=${nextMode}${useOverride ? getChallengeOverrideParams() : ""}`,
+          `/api/challenge?mode=${allRandom ? "wild" : nextMode}${useOverride ? getChallengeOverrideParams() : ""}`,
         );
         const startArticle = await loadArticle(nextChallenge.start);
+        const nextRun = await createServerRun(nextChallenge, nextMode, allRandom, nextPlayerName);
 
         setChallenge(nextChallenge);
         setArticle(startArticle);
-        setCurrentTitle(nextChallenge.start);
-        setHistory([nextChallenge.start]);
-        setStartedAt(Date.now());
-        setElapsedMs(0);
+        applyServerRun(nextRun);
+        setRunMeta({ mode: nextMode, allRandom });
         setShareText("");
         setResultImageUrl("");
         setFindQuery("");
         setActiveFindIndex(-1);
-        setShareState("제시어 자동 설정됨");
+        setShareState(allRandom ? "아예랜덤 설정됨" : "제시어 자동 설정됨");
         window.history.replaceState({ view: "race", title: nextChallenge.start }, "", window.location.href);
         window.setTimeout(() => setShareState("대기"), 1400);
       } catch (challengeError) {
@@ -416,8 +548,18 @@ function App() {
         setIsLoading(false);
       }
     },
-    [loadArticle],
+    [applyServerRun, createServerRun, loadArticle, playerName],
   );
+
+  useEffect(() => {
+    void fetchRankings();
+
+    const id = window.setInterval(() => {
+      void fetchRankings();
+    }, 5000);
+
+    return () => window.clearInterval(id);
+  }, [fetchRankings]);
 
   useEffect(() => {
     if (!isEntered || !challenge || isComplete || isLoading) {
@@ -524,50 +666,29 @@ function App() {
         clicks: record.clicks,
         time: formatDuration(record.elapsedMs),
         score: record.score,
-        title: record.title,
       })),
     [sortedRecords],
   );
   const bestScore = records.length > 0 ? Math.max(...records.map((record) => record.score)) : 0;
   const bestTime = records.length > 0 ? Math.min(...records.map((record) => record.elapsedMs)) : 0;
 
-  const saveCompletionRecord = useCallback(
-    (finalElapsedMs: number, finalHistory: string[]) => {
-      if (!challenge) {
-        return;
-      }
-
-      const finalClicks = Math.max(0, finalHistory.length - 1);
-      const score = calculateScore(finalElapsedMs, finalClicks);
-      const title = getScoreTitle(score);
-      const record: CompletionRecord = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        playerName: playerName || "Player",
-        start: challenge.start,
-        target: challenge.target,
-        clicks: finalClicks,
-        elapsedMs: finalElapsedMs,
-        score,
-        title,
-        completedAt: new Date().toISOString(),
-        path: finalHistory,
-      };
-
-      setRecords((items) => {
-        const next = [record, ...items].slice(0, 50);
-        localStorage.setItem("wsr.records", JSON.stringify(next));
-        return next;
-      });
-    },
-    [challenge, playerName],
-  );
-
   const enterGame = async () => {
     const cleanName = playerName.trim() || "PlayerA";
     setPlayerName(cleanName);
     localStorage.setItem("wsr.playerName", cleanName);
     setIsEntered(true);
-    await startChallenge(mode, true);
+    await startChallenge(mode, true, false, cleanName);
+  };
+
+  const randomizeEverything = async () => {
+    const cleanName = playerName.trim() || "PlayerA";
+    const nextMode: Mode = Math.random() > 0.5 ? "casual" : "practice";
+
+    setPlayerName(cleanName);
+    localStorage.setItem("wsr.playerName", cleanName);
+    setMode(nextMode);
+    setIsEntered(true);
+    await startChallenge(nextMode, false, true, cleanName);
   };
 
   const switchMode = (nextMode: Mode) => {
@@ -586,8 +707,10 @@ function App() {
     setIsEntered(false);
     setChallenge(null);
     setArticle(null);
+    setRunId("");
     setCurrentTitle("");
     setHistory([]);
+    setRouteSteps([]);
     setElapsedMs(0);
     setError("");
     setShareText("");
@@ -609,11 +732,9 @@ function App() {
 
     try {
       const startArticle = await loadArticle(challenge.start);
+      const nextRun = await createServerRun(challenge, runMeta.mode, runMeta.allRandom, playerName.trim() || "PlayerA");
       setArticle(startArticle);
-      setCurrentTitle(challenge.start);
-      setHistory([challenge.start]);
-      setStartedAt(Date.now());
-      setElapsedMs(0);
+      applyServerRun(nextRun);
       setShareText("");
       setResultImageUrl("");
       setFindQuery("");
@@ -629,21 +750,28 @@ function App() {
   };
 
   const goBackArticle = useCallback(async () => {
-    if (history.length <= 1 || isLoading || isNavigating) {
+    if (!runId || history.length <= 1 || isLoading || isNavigating) {
       return;
     }
-
-    const nextHistory = history.slice(0, -1);
-    const previousTitle = nextHistory[nextHistory.length - 1];
 
     setIsNavigating(true);
     setError("");
 
     try {
-      const previousArticle = await loadArticle(previousTitle);
+      const response = await readJson<RunResponse>(`/api/runs/${encodeURIComponent(runId)}/back`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      });
+
+      if (!response.allowed) {
+        setShareState("이전 문서 없음");
+        window.setTimeout(() => setShareState("대기"), 1200);
+        return;
+      }
+
+      const previousArticle = await loadArticle(response.run.currentTitle);
       setArticle(previousArticle);
-      setCurrentTitle(previousTitle);
-      setHistory(nextHistory);
+      applyServerRun(response.run);
       setShareText("");
       setResultImageUrl("");
       setFindQuery("");
@@ -655,10 +783,10 @@ function App() {
     } finally {
       setIsNavigating(false);
     }
-  }, [history, isLoading, isNavigating, loadArticle]);
+  }, [applyServerRun, history.length, isLoading, isNavigating, loadArticle, runId]);
 
   const navigateToArticle = async (title: string) => {
-    if (!article || !challenge || isComplete || isNavigating) {
+    if (!article || !challenge || !runId || isComplete || isNavigating) {
       return;
     }
 
@@ -666,10 +794,10 @@ function App() {
     setError("");
 
     try {
-      const event = await readJson<{ allowed: boolean; error?: string }>("/api/run/event", {
+      const event = await readJson<RunResponse>(`/api/runs/${encodeURIComponent(runId)}/link`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ from: article.title, to: title }),
+        body: JSON.stringify({ to: title }),
       });
 
       if (!event.allowed) {
@@ -677,20 +805,29 @@ function App() {
         return;
       }
 
-      const nextArticle = await loadArticle(title);
-      const nextHistory = [...history, title];
-      const finalElapsedMs = Date.now() - startedAt;
+      const nextArticle = await loadArticle(event.run.currentTitle);
 
       setArticle(nextArticle);
-      setCurrentTitle(title);
-      setHistory(nextHistory);
+      applyServerRun(event.run);
       setFindQuery("");
       setActiveFindIndex(-1);
-      window.history.pushState({ view: "race", title }, "", window.location.href);
+      window.history.pushState({ view: "race", title: event.run.currentTitle }, "", window.location.href);
 
-      if (title === challenge.target) {
-        setElapsedMs(finalElapsedMs);
-        saveCompletionRecord(finalElapsedMs, nextHistory);
+      if (event.completed) {
+        setElapsedMs(event.run.elapsedMs);
+
+        if (event.ranking?.records) {
+          setRecords(event.ranking.records);
+          setRankingSessionStartedAt(event.ranking.sessionStartedAt);
+        }
+
+        if (event.ranking?.reason === "practice_mode" || runMeta.mode === "practice") {
+          setShareState("연습 완주");
+        } else {
+          setShareState("세션 랭킹 반영됨");
+        }
+
+        window.setTimeout(() => setShareState("대기"), 1400);
       }
     } catch (navigationError) {
       setError(navigationError instanceof Error ? navigationError.message : String(navigationError));
@@ -729,7 +866,7 @@ function App() {
 
   const copyRoomCode = async () => {
     const copied = await copyTextToClipboard(roomCode);
-    setShareState(copied ? "방 코드 복사됨" : `방 코드 ${roomCode}`);
+    setShareState(copied ? "세션 코드 복사됨" : `세션 코드 ${roomCode}`);
     window.setTimeout(() => setShareState("대기"), 1400);
   };
 
@@ -741,10 +878,9 @@ function App() {
     const message = [
       "나무위키 스피드런",
       `${challenge.start} -> ${challenge.target}`,
-      `${formatDuration(elapsedMs)} · ${clicks}클릭 · ${currentRecord?.score ?? liveScore}점 · ${
-        currentRecord?.title ?? liveScoreTitle
-      }`,
-      `경로: ${history.join(" -> ")}`,
+      `모드: ${runModeLabel} · 랜덤 여부: ${runRandomLabel}`,
+      `${formatDuration(elapsedMs)} · ${clicks}클릭 · ${resultScore}점`,
+      `경로: ${routeTimeline.split(" → ").join(" -> ")}`,
     ].join("\n");
 
     const copied = await copyTextToClipboard(message);
@@ -791,43 +927,80 @@ function App() {
     context.fillText(`Time ${formatDuration(elapsedMs)}   ${clicks} clicks`, 76, 266);
     context.fillStyle = "#00a495";
     context.font = "700 32px Noto Sans KR, sans-serif";
-    context.fillText(`${currentRecord?.score ?? liveScore} points · ${currentRecord?.title ?? liveScoreTitle}`, 76, 316);
+    context.fillText(`${resultScore} points`, 76, 316);
+    context.fillStyle = "#54595d";
+    context.font = "600 28px Noto Sans KR, sans-serif";
+    context.fillText(`모드 ${runModeLabel} · 랜덤 여부 ${runRandomLabel}`, 76, 366);
 
-    const nodeGap = Math.min(184, 980 / Math.max(1, history.length - 1));
-    const startX = 90;
-    const y = 420;
-    context.strokeStyle = "#00a495";
-    context.lineWidth = 5;
-    context.beginPath();
-    history.forEach((_, index) => {
-      const x = startX + nodeGap * index;
-      if (index === 0) {
-        context.moveTo(x, y);
-      } else {
-        context.lineTo(x, y);
+    const graphSteps = routeSteps.length > 0 ? routeSteps : createRouteStepsFromTitles(history);
+    const maxImageRows = 8;
+    const imageSteps =
+      graphSteps.length > maxImageRows
+        ? [...graphSteps.slice(0, maxImageRows - 1), graphSteps[graphSteps.length - 1]]
+        : graphSteps;
+    const skippedSteps = graphSteps.length - imageSteps.length;
+    const graphLeft = 700;
+    const badgeWidth = 50;
+    const rowGap = 52;
+    const firstY = 160;
+
+    context.fillStyle = "#202122";
+    context.font = "700 30px Noto Sans KR, sans-serif";
+    context.fillText("이동 로그", graphLeft, 116);
+
+    imageSteps.forEach((step, displayIndex) => {
+      const originalIndex = skippedSteps > 0 && displayIndex === imageSteps.length - 1 ? graphSteps.length - 1 : displayIndex;
+      const y = firstY + displayIndex * rowGap;
+      const previousY = firstY + (displayIndex - 1) * rowGap;
+      const isTarget = step.title === challenge.target;
+      const isBack = step.action === "back";
+
+      if (displayIndex > 0) {
+        context.strokeStyle = isBack ? "#899197" : "#00a495";
+        context.lineWidth = isBack ? 3 : 4;
+        context.setLineDash(isBack ? [8, 8] : []);
+        context.beginPath();
+        context.moveTo(graphLeft + badgeWidth / 2, previousY + 18);
+        context.lineTo(graphLeft + badgeWidth / 2, y - 18);
+        context.stroke();
+        context.setLineDash([]);
       }
-    });
-    context.stroke();
 
-    history.forEach((item, index) => {
-      const x = startX + nodeGap * index;
-      context.fillStyle = item === challenge.target ? "#00a495" : "#ffffff";
-      context.strokeStyle = item === challenge.target ? "#008275" : "#9aa4aa";
-      context.lineWidth = 4;
-      context.beginPath();
-      context.arc(x, y, 18, 0, Math.PI * 2);
-      context.fill();
-      context.stroke();
+      if (skippedSteps > 0 && displayIndex === imageSteps.length - 1) {
+        context.fillStyle = "#6b7278";
+        context.font = "700 18px Noto Sans KR, sans-serif";
+        context.fillText(`+${skippedSteps}단계`, graphLeft + 66, y - 32);
+      }
+
+      context.fillStyle = isTarget ? "#00a495" : isBack ? "#f1f3f5" : "#ffffff";
+      context.strokeStyle = isTarget ? "#008275" : isBack ? "#899197" : "#9aa4aa";
+      context.lineWidth = 3;
+      context.fillRect(graphLeft, y - 18, badgeWidth, 36);
+      context.strokeRect(graphLeft, y - 18, badgeWidth, 36);
+
+      context.fillStyle = isTarget ? "#ffffff" : "#202122";
+      context.font = "700 18px JetBrains Mono, monospace";
+      context.fillText(String(originalIndex + 1).padStart(2, "0"), graphLeft + 11, y + 7);
+
+      context.fillStyle = isBack ? "#6b7278" : "#008275";
+      context.font = "700 18px Noto Sans KR, sans-serif";
+      context.fillText(routeActionLabels[step.action], graphLeft + 66, y - 2);
 
       context.fillStyle = "#202122";
       context.font = "600 22px Noto Sans KR, sans-serif";
-      context.fillText(item.slice(0, 10), x - 30, y + 62);
+      context.fillText(step.title.slice(0, 15), graphLeft + 124, y + 8);
     });
 
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     const imageUrl = blob ? URL.createObjectURL(blob) : canvas.toDataURL("image/png");
     setResultImageUrl(imageUrl);
-    setShareState("이미지 준비됨");
+    const link = document.createElement("a");
+    link.href = imageUrl;
+    link.download = `wiki-speed-run-result-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setShareState("결과 이미지 저장됨");
     window.setTimeout(() => setShareState("대기"), 1400);
   };
 
@@ -846,8 +1019,8 @@ function App() {
           </div>
         </div>
 
-        <nav className="modeTabs" aria-label="게임 모드">
-          {(["daily", "infinite", "room"] as Mode[]).map((item) => (
+        <nav className="modeTabs" aria-label="룰 모드">
+          {(["casual", "practice"] as Mode[]).map((item) => (
             <button
               className={mode === item ? "tabButton active" : "tabButton"}
               type="button"
@@ -855,12 +1028,15 @@ function App() {
               onClick={() => switchMode(item)}
               key={item}
             >
-              {item === "daily" && <Flag aria-hidden="true" size={18} />}
-              {item === "infinite" && <Shuffle aria-hidden="true" size={18} />}
-              {item === "room" && <Users aria-hidden="true" size={18} />}
+              {item === "casual" && <Users aria-hidden="true" size={18} />}
+              {item === "practice" && <Target aria-hidden="true" size={18} />}
               <span>{modeLabels[item]}</span>
             </button>
           ))}
+          <button className="tabButton randomAllButton" type="button" disabled={isLoading} onClick={() => void randomizeEverything()}>
+            <Shuffle aria-hidden="true" size={18} />
+            <span>아예랜덤</span>
+          </button>
         </nav>
 
         <div className="liveBadge" aria-live="polite">
@@ -891,17 +1067,17 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="entryTelemetry" aria-label="로컬 기록 요약">
+            <div className="entryTelemetry" aria-label="세션 랭킹 요약">
               <div>
-                <span>최고 점수</span>
+                <span>세션 최고 점수</span>
                 <strong>{bestScore || "-"}</strong>
               </div>
               <div>
-                <span>최고 시간</span>
+                <span>세션 최고 시간</span>
                 <strong>{bestTime ? formatDuration(bestTime) : "--:--:--"}</strong>
               </div>
               <div>
-                <span>완주 기록</span>
+                <span>세션 완주</span>
                 <strong>{records.length}</strong>
               </div>
             </div>
@@ -951,8 +1127,9 @@ function App() {
             <section className="entryRankPanel">
               <div className="panelHeader">
                 <Trophy aria-hidden="true" size={18} />
-                <h2>로컬 랭킹</h2>
+                <h2>세션 랭킹</h2>
               </div>
+              <div className="rankSession">서버 시작 {rankingSessionStartedAt ? formatDate(rankingSessionStartedAt) : "-"}</div>
               <div className="entryRankList">
                 {leaderboard.length > 0 ? (
                   leaderboard.slice(0, 3).map((row) => (
@@ -984,6 +1161,10 @@ function App() {
                 <Shuffle aria-hidden="true" size={18} />
                 <span>새 제시어</span>
               </button>
+              <button className="ghostAction strongGhostAction" type="button" disabled={isLoading} onClick={() => void randomizeEverything()}>
+                <Shuffle aria-hidden="true" size={18} />
+                <span>아예랜덤</span>
+              </button>
               <button className="ghostAction" type="button" disabled={isLoading || !challenge} onClick={resetCurrentChallenge}>
                 <RotateCcw aria-hidden="true" size={18} />
                 <span>현재 판 재시작</span>
@@ -1008,7 +1189,6 @@ function App() {
               <Metric icon={Clock3} label="타이머" value={formatDuration(elapsedMs)} accent="cyan" mono />
               <Metric icon={MousePointerClick} label="클릭 수" value={String(clicks)} accent="paper" mono />
               <Metric icon={Award} label="점수" value={String(liveScore)} accent="amber" mono />
-              <Metric icon={Trophy} label="칭호" value={currentRecord?.title ?? liveScoreTitle} accent="cyan" />
             </section>
 
             <section className="guardPanel" aria-label="공정성 잠금">
@@ -1033,10 +1213,13 @@ function App() {
                 <h2>이동 기록</h2>
               </div>
               <ol className="historyList">
-                {history.map((item, index) => (
-                  <li key={`${item}-${index}`} className={index === history.length - 1 ? "current" : ""}>
-                    <span>{String(index).padStart(2, "0")}</span>
-                    <strong>{item}</strong>
+                {routeSteps.map((step, index) => (
+                  <li
+                    key={`${step.title}-${step.action}-${index}`}
+                    className={`${index === routeSteps.length - 1 ? "current" : ""}${step.action === "back" ? " backStep" : ""}`}
+                  >
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <strong>{formatRouteStepLabel(step, index)}</strong>
                   </li>
                 ))}
               </ol>
@@ -1071,6 +1254,10 @@ function App() {
               <button className="primaryAction" type="button" disabled={isLoading} onClick={() => startChallenge(mode)}>
                 <Shuffle aria-hidden="true" size={18} />
                 <span>새 제시어</span>
+              </button>
+              <button className="ghostAction strongGhostAction" type="button" disabled={isLoading} onClick={() => void randomizeEverything()}>
+                <Shuffle aria-hidden="true" size={18} />
+                <span>랜덤</span>
               </button>
               <button className="ghostAction" type="button" disabled={isLoading || !challenge} onClick={resetCurrentChallenge}>
                 <RotateCcw aria-hidden="true" size={18} />
@@ -1144,11 +1331,19 @@ function App() {
                   <div className="panelKicker">결과</div>
                   <h2>{formatDuration(elapsedMs)}</h2>
                   <div className="scoreResult">
-                    <strong>{currentRecord?.score ?? liveScore}</strong>
-                    <span>{currentRecord?.title ?? liveScoreTitle}</span>
+                    <strong>{resultScore}</strong>
+                    {isPractice && <span>연습 기록 제외</span>}
+                  </div>
+                  <div className="resultMeta" aria-label="결과 설정">
+                    <span>
+                      모드 <strong>{runModeLabel}</strong>
+                    </span>
+                    <span>
+                      랜덤 여부 <strong>{runRandomLabel}</strong>
+                    </span>
                   </div>
                   <p>
-                    {clicks}회 클릭 · {history.join(" → ")}
+                    {clicks}회 클릭 · {routeTimeline}
                   </p>
                 </div>
                 <div className="finishActions">
@@ -1158,7 +1353,7 @@ function App() {
                   </button>
                   <button className="secondaryAction" type="button" onClick={downloadResultImage}>
                     <ImageDown aria-hidden="true" size={18} />
-                    <span>결과 이미지</span>
+                    <span>결과 저장</span>
                   </button>
                 </div>
                 {(shareText || resultImageUrl) && (
@@ -1171,7 +1366,7 @@ function App() {
                     )}
                     {resultImageUrl && (
                       <a className="downloadLink" href={resultImageUrl} download="wiki-speed-run-result.png">
-                        결과 이미지 받기
+                        결과 이미지 다시 받기
                       </a>
                     )}
                   </div>
@@ -1244,15 +1439,15 @@ function App() {
             </article>
           </section>
 
-          <aside className="raceRail" aria-label="멀티플레이와 결과">
+          <aside className="raceRail" aria-label="로컬 현황과 결과">
             <section className="roomPanel">
               <div className="panelHeader">
                 <Swords aria-hidden="true" size={18} />
-                <h2>사설 방</h2>
+                <h2>로컬 현황</h2>
               </div>
               <div className="roomCodeLine">
                 <code>{roomCode}</code>
-                <button className="iconButton" type="button" aria-label="방 코드 복사" onClick={copyRoomCode}>
+                <button className="iconButton" type="button" aria-label="세션 코드 복사" onClick={copyRoomCode}>
                   <Copy aria-hidden="true" size={18} />
                 </button>
               </div>
@@ -1277,14 +1472,15 @@ function App() {
                 <Trophy aria-hidden="true" size={18} />
                 <h2>이동 경로</h2>
               </div>
-              <RouteGraph history={history} target={challenge?.target ?? ""} />
+              <RouteGraph steps={routeSteps} target={challenge?.target ?? ""} />
             </section>
 
             <section className="leaderboardPanel">
               <div className="panelHeader">
                 <Settings2 aria-hidden="true" size={18} />
-                <h2>로컬 랭킹</h2>
+                <h2>세션 랭킹</h2>
               </div>
+              <div className="rankSession">서버 시작 {rankingSessionStartedAt ? formatDate(rankingSessionStartedAt) : "-"}</div>
               <div className="rankingModes" aria-label="랭킹 정렬 기준">
                 {(["clicks", "time", "score"] as RankingMode[]).map((item) => (
                   <button
@@ -1298,7 +1494,7 @@ function App() {
                   </button>
                 ))}
               </div>
-              <div className="rankTable" role="table" aria-label="로컬 랭킹">
+              <div className="rankTable" role="table" aria-label="세션 랭킹">
                 {leaderboard.length > 0 ? (
                   leaderboard.map((row) => (
                     <div className="rankRow" role="row" key={`${row.name}-${row.rank}-${row.score}`}>
@@ -1306,7 +1502,6 @@ function App() {
                       <strong role="cell">{row.name}</strong>
                       <span role="cell">{row.clicks}</span>
                       <code role="cell">{row.score}</code>
-                      <em role="cell">{row.title}</em>
                     </div>
                   ))
                 ) : (
@@ -1344,27 +1539,55 @@ function Metric({ icon: Icon, label, value, accent, mono = false }: MetricProps)
   );
 }
 
-function RouteGraph({ history, target }: { history: string[]; target: string }) {
-  const nodeCount = Math.max(history.length, 2);
-  const points = history.map((title, index) => ({
-    title,
-    x: 38 + (index * 564) / (nodeCount - 1),
-    y: index % 2 === 0 ? 72 : 112,
-  }));
+function RouteGraph({ steps, target }: { steps: RouteStep[]; target: string }) {
+  const graphSteps = steps.length > 0 ? steps : [];
+  const rowGap = 58;
+  const firstY = 36;
+  const height = Math.max(146, firstY * 2 + Math.max(0, graphSteps.length - 1) * rowGap);
 
-  const linePoints = points.map((point) => `${point.x},${point.y}`).join(" ");
+  if (graphSteps.length === 0) {
+    return <div className="emptyRank">경로 대기</div>;
+  }
 
   return (
-    <svg className="routeGraph" viewBox="0 0 640 184" role="img" aria-label={`${history.join("에서 ")} 경로`}>
-      <polyline className="routeLine" points={linePoints} />
-      {points.map((point, index) => (
-        <g key={`${point.title}-${index}`}>
-          <circle className={point.title === target ? "targetNode" : "routeNode"} cx={point.x} cy={point.y} r="12" />
-          <text x={point.x} y={point.y + 34} textAnchor="middle">
-            {point.title.length > 10 ? `${point.title.slice(0, 10)}...` : point.title}
-          </text>
-        </g>
-      ))}
+    <svg className="routeGraph topDown" viewBox={`0 0 640 ${height}`} role="img" aria-label={formatRouteSteps(graphSteps)}>
+      {graphSteps.slice(1).map((step, index) => {
+        const y1 = firstY + index * rowGap + 20;
+        const y2 = firstY + (index + 1) * rowGap - 20;
+
+        return (
+          <line
+            className={step.action === "back" ? "routeLine backLine" : "routeLine"}
+            x1="50"
+            x2="50"
+            y1={y1}
+            y2={y2}
+            key={`line-${step.title}-${step.action}-${index}`}
+          />
+        );
+      })}
+
+      {graphSteps.map((step, index) => {
+        const y = firstY + index * rowGap;
+        const isTarget = step.title === target;
+        const isBack = step.action === "back";
+        const stepClass = `${isTarget ? " targetStep" : ""}${isBack ? " backStep" : ""}`;
+
+        return (
+          <g className="routeStep" key={`${step.title}-${step.action}-${index}`}>
+            <rect className={`routeStepNumber${stepClass}`} x="24" y={y - 18} width="52" height="36" rx="4" />
+            <text className={`routeStepIndex${stepClass}`} x="50" y={y + 7} textAnchor="middle">
+              {String(index + 1).padStart(2, "0")}
+            </text>
+            <text className={`routeActionLabel${stepClass}`} x="96" y={y - 2}>
+              {routeActionLabels[step.action]}
+            </text>
+            <text className="routeTitle" x="154" y={y + 18}>
+              {step.title.length > 22 ? `${step.title.slice(0, 22)}...` : step.title}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }

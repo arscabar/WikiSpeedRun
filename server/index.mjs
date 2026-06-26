@@ -9,7 +9,14 @@ import { fileURLToPath } from "node:url";
 const NAMU_ORIGIN = "https://namu.wiki";
 const DEFAULT_PORT = Number(process.env.WSR_API_PORT ?? process.env.WSR_PORT ?? 3002);
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const RANDOM_ATTEMPTS = 18;
+const RANDOM_ATTEMPTS = 36;
+const MIN_START_LINKS = 8;
+const MIN_START_BLOCKS = 2;
+const MIN_TARGET_BLOCKS = 1;
+const MAX_RANKING_RECORDS = 200;
+const MAX_ROUTE_STEPS = 80;
+const VALID_MODES = new Set(["casual", "practice"]);
+const VALID_STEP_ACTIONS = new Set(["start", "link", "back"]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -20,6 +27,10 @@ const challengeLogPath = path.join(cacheDir, "challenges.json");
 const distDir = process.env.WSR_DIST_DIR ? path.resolve(process.env.WSR_DIST_DIR) : path.join(rootDir, "dist");
 
 const app = express();
+const sessionStartedAt = new Date().toISOString();
+const players = new Map();
+const activeRuns = new Map();
+let sessionRankings = [];
 
 app.use(express.json({ limit: "64kb" }));
 app.use((_, res, next) => {
@@ -35,17 +46,154 @@ app.get("/api/health", (_, res) => {
   res.json({ ok: true, service: "wiki-speed-run-local", port: DEFAULT_PORT });
 });
 
+app.get("/api/rankings", (_, res) => {
+  res.json({
+    sessionStartedAt,
+    total: sessionRankings.length,
+    records: sessionRankings,
+  });
+});
+
+app.post("/api/rankings", (_, res) => {
+  res.status(405).json({
+    accepted: false,
+    error: "rankings_are_server_authoritative",
+    message: "랭킹은 서버 run 로그로만 생성됩니다.",
+  });
+});
+
+app.post("/api/players", (req, res) => {
+  try {
+    const player = upsertPlayer(req.body);
+    res.json({
+      player,
+      sessionStartedAt,
+    });
+  } catch (error) {
+    res.status(400).json({ error: "invalid_player", message: getErrorMessage(error) });
+  }
+});
+
+app.post("/api/runs", (req, res) => {
+  try {
+    const run = createRun(req.body);
+    res.status(201).json({ run: publicRun(run), sessionStartedAt });
+  } catch (error) {
+    res.status(400).json({ error: "invalid_run", message: getErrorMessage(error) });
+  }
+});
+
+app.get("/api/runs/:runId", (req, res) => {
+  const run = activeRuns.get(req.params.runId);
+
+  if (!run) {
+    res.status(404).json({ error: "run_not_found" });
+    return;
+  }
+
+  res.json({ run: publicRun(run), sessionStartedAt });
+});
+
+app.post("/api/runs/:runId/link", async (req, res) => {
+  const run = activeRuns.get(req.params.runId);
+  const to = normalizeTitle(typeof req.body?.to === "string" ? req.body.to : "");
+
+  if (!run || !to) {
+    res.status(run ? 400 : 404).json({ allowed: false, error: run ? "missing_to" : "run_not_found" });
+    return;
+  }
+
+  if (run.status === "finished") {
+    res.status(409).json({ allowed: false, error: "run_already_finished", run: publicRun(run) });
+    return;
+  }
+
+  try {
+    const article = await getArticle(run.currentTitle);
+    const allowed = article.outgoingLinks.includes(to);
+
+    if (!allowed) {
+      res.json({ allowed: false, from: run.currentTitle, to, run: publicRun(run) });
+      return;
+    }
+
+    run.documentStack.push(to);
+    run.routeSteps.push({ title: to, action: "link" });
+    run.currentTitle = to;
+    run.updatedAt = new Date().toISOString();
+
+    const completed = to === run.target;
+    const ranking = completed ? finishRun(run) : null;
+
+    res.json({
+      allowed: true,
+      completed,
+      from: article.title,
+      to,
+      run: publicRun(run),
+      ranking,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(502).json({ allowed: false, error: "validation_failed", message: getErrorMessage(error), run: publicRun(run) });
+  }
+});
+
+app.post("/api/runs/:runId/back", (req, res) => {
+  const run = activeRuns.get(req.params.runId);
+
+  if (!run) {
+    res.status(404).json({ allowed: false, error: "run_not_found" });
+    return;
+  }
+
+  if (run.status === "finished") {
+    res.status(409).json({ allowed: false, error: "run_already_finished", run: publicRun(run) });
+    return;
+  }
+
+  if (run.documentStack.length <= 1) {
+    res.json({ allowed: false, error: "no_previous_document", run: publicRun(run) });
+    return;
+  }
+
+  run.documentStack.pop();
+  const previousTitle = run.documentStack[run.documentStack.length - 1];
+  run.routeSteps.push({ title: previousTitle, action: "back" });
+  run.currentTitle = previousTitle;
+  run.updatedAt = new Date().toISOString();
+
+  res.json({ allowed: true, run: publicRun(run) });
+});
+
+app.post("/api/runs/:runId/finish", (req, res) => {
+  const run = activeRuns.get(req.params.runId);
+
+  if (!run) {
+    res.status(404).json({ completed: false, error: "run_not_found" });
+    return;
+  }
+
+  if (run.currentTitle !== run.target) {
+    res.status(409).json({ completed: false, error: "target_not_reached", run: publicRun(run) });
+    return;
+  }
+
+  const ranking = finishRun(run);
+  res.json({ completed: true, run: publicRun(run), ranking });
+});
+
 app.get("/api/challenge", async (req, res) => {
   try {
-    const mode = typeof req.query.mode === "string" ? req.query.mode : "daily";
+    const mode = typeof req.query.mode === "string" ? req.query.mode : "casual";
     const requestedStart = typeof req.query.start === "string" ? normalizeTitle(req.query.start) : "";
     const requestedTarget = typeof req.query.target === "string" ? normalizeTitle(req.query.target) : "";
 
     if (requestedStart && requestedTarget) {
       const startArticle = await getArticle(requestedStart);
-      await getArticle(requestedTarget);
+      const targetArticle = await getArticle(requestedTarget);
 
-      if (requestedStart === requestedTarget || startArticle.outgoingLinks.length === 0) {
+      if (requestedStart === requestedTarget || !isPlayableStartArticle(startArticle) || !isPlayableTargetArticle(targetArticle)) {
         res.status(400).json({ error: "invalid_challenge_override" });
         return;
       }
@@ -63,21 +211,20 @@ app.get("/api/challenge", async (req, res) => {
       return;
     }
 
-    const target = await pickRandomDocument();
-    let start = await pickRandomDocument(target.title);
-
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const startArticle = await getArticle(start.title);
-      if (startArticle.outgoingLinks.length > 0) {
-        break;
-      }
-      start = await pickRandomDocument(target.title);
-    }
+    const target = await pickRandomDocument("", { minBlocks: MIN_TARGET_BLOCKS, minLinks: 0 });
+    const start = await pickRandomDocument(target.title, { minBlocks: MIN_START_BLOCKS, minLinks: MIN_START_LINKS });
 
     const challenge = {
       start: start.title,
       target: target.title,
-      label: mode === "room" ? "방 자동 제시어" : mode === "infinite" ? "랜덤 제시어" : "자동 제시어",
+      label:
+        mode === "wild"
+          ? "아예랜덤 제시어"
+          : mode === "practice"
+            ? "연습 제시어"
+            : mode === "casual"
+              ? "캐주얼 제시어"
+              : "자동 제시어",
       generatedAt: new Date().toISOString(),
       source: "namu.wiki/random",
     };
@@ -172,7 +319,7 @@ if (isDirectRun) {
 
 export { app, startServer };
 
-async function pickRandomDocument(exceptTitle) {
+async function pickRandomDocument(exceptTitle, { minBlocks = 1, minLinks = 0 } = {}) {
   let lastTitle = "";
 
   for (let attempt = 0; attempt < RANDOM_ATTEMPTS; attempt += 1) {
@@ -183,7 +330,14 @@ async function pickRandomDocument(exceptTitle) {
       continue;
     }
 
-    return { title };
+    try {
+      const article = await getArticle(title);
+      if (isPlayableArticle(article, { minBlocks, minLinks })) {
+        return { title };
+      }
+    } catch {
+      // Keep sampling random documents until a playable article is found.
+    }
   }
 
   throw new Error(`Could not pick a valid random document. Last candidate: ${lastTitle || "none"}`);
@@ -411,6 +565,22 @@ function isNormalDocumentTitle(title) {
   return !forbiddenPrefixes.some((prefix) => title.startsWith(prefix));
 }
 
+function isPlayableStartArticle(article) {
+  return isPlayableArticle(article, { minBlocks: MIN_START_BLOCKS, minLinks: MIN_START_LINKS });
+}
+
+function isPlayableTargetArticle(article) {
+  return isPlayableArticle(article, { minBlocks: MIN_TARGET_BLOCKS, minLinks: 0 });
+}
+
+function isPlayableArticle(article, { minBlocks, minLinks }) {
+  const paragraphCount = article.blocks.filter((block) => block.type === "paragraph").length;
+  const hasEnoughBody = article.blocks.length >= minBlocks && paragraphCount > 0;
+  const hasEnoughLinks = article.outgoingLinks.length >= minLinks;
+
+  return hasEnoughBody && hasEnoughLinks && isNormalDocumentTitle(article.title);
+}
+
 function normalizeWhitespace(value) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -455,6 +625,196 @@ async function appendChallengeLog(challenge) {
 
   entries.unshift(challenge);
   await writeJson(challengeLogPath, entries.slice(0, 100));
+}
+
+function upsertPlayer(payload) {
+  const incomingId = typeof payload?.playerId === "string" ? payload.playerId.trim() : "";
+  const playerName = cleanRankingText(payload?.playerName, 18) || "Player";
+  const now = new Date().toISOString();
+  const existing = incomingId ? players.get(incomingId) : null;
+
+  if (existing) {
+    existing.name = playerName;
+    existing.lastSeenAt = now;
+    existing.connected = true;
+    return existing;
+  }
+
+  const player = {
+    id: createId("player"),
+    name: playerName,
+    role: players.size === 0 ? "host" : "player",
+    joinedAt: now,
+    lastSeenAt: now,
+    connected: true,
+  };
+
+  players.set(player.id, player);
+  return player;
+}
+
+function createRun(payload) {
+  const playerId = typeof payload?.playerId === "string" ? payload.playerId.trim() : "";
+  const player = playerId ? players.get(playerId) : null;
+
+  if (!player) {
+    throw new Error("player_not_found");
+  }
+
+  const start = normalizeTitle(typeof payload?.start === "string" ? payload.start : "");
+  const target = normalizeTitle(typeof payload?.target === "string" ? payload.target : "");
+  const mode = VALID_MODES.has(payload?.mode) ? payload.mode : "casual";
+
+  if (!start || !target || start === target) {
+    throw new Error("invalid_start_or_target");
+  }
+
+  const now = new Date().toISOString();
+  const run = {
+    id: createId("run"),
+    playerId: player.id,
+    playerName: player.name,
+    start,
+    target,
+    mode,
+    allRandom: Boolean(payload?.allRandom),
+    status: "running",
+    currentTitle: start,
+    documentStack: [start],
+    routeSteps: [{ title: start, action: "start" }],
+    startedAt: now,
+    finishedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    record: null,
+  };
+
+  activeRuns.set(run.id, run);
+  return run;
+}
+
+function finishRun(run) {
+  if (run.status === "finished") {
+    return createRankingSnapshot(run.record);
+  }
+
+  run.status = "finished";
+  run.finishedAt = new Date().toISOString();
+  run.updatedAt = run.finishedAt;
+
+  if (run.mode === "practice") {
+    return createRankingSnapshot(null, "practice_mode");
+  }
+
+  const record = createRankingRecordFromRun(run);
+  run.record = record;
+  sessionRankings = [record, ...sessionRankings].slice(0, MAX_RANKING_RECORDS);
+
+  return createRankingSnapshot(record);
+}
+
+function createRankingRecordFromRun(run) {
+  const elapsedMs = getRunElapsedMs(run);
+  const clicks = Math.max(0, run.routeSteps.length - 1);
+  const score = calculateScore(elapsedMs, clicks);
+
+  return {
+    id: createId("record"),
+    playerName: run.playerName,
+    start: run.start,
+    target: run.target,
+    mode: run.mode,
+    allRandom: run.allRandom,
+    clicks,
+    elapsedMs,
+    score,
+    completedAt: run.finishedAt,
+    path: run.routeSteps.map(formatNumberedRouteStep),
+    routeSteps: run.routeSteps,
+    runId: run.id,
+    playerId: run.playerId,
+  };
+}
+
+function createRankingSnapshot(record = null, reason = "") {
+  return {
+    accepted: Boolean(record),
+    reason,
+    record,
+    sessionStartedAt,
+    total: sessionRankings.length,
+    records: sessionRankings,
+  };
+}
+
+function publicRun(run) {
+  return {
+    id: run.id,
+    playerId: run.playerId,
+    playerName: run.playerName,
+    start: run.start,
+    target: run.target,
+    mode: run.mode,
+    allRandom: run.allRandom,
+    status: run.status,
+    currentTitle: run.currentTitle,
+    documentStack: run.documentStack,
+    routeSteps: run.routeSteps,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    elapsedMs: getRunElapsedMs(run),
+    clicks: Math.max(0, run.routeSteps.length - 1),
+    score: calculateScore(getRunElapsedMs(run), Math.max(0, run.routeSteps.length - 1)),
+    record: run.record,
+  };
+}
+
+function getRunElapsedMs(run) {
+  const start = new Date(run.startedAt).getTime();
+  const end = run.finishedAt ? new Date(run.finishedAt).getTime() : Date.now();
+
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return 0;
+  }
+
+  return Math.max(0, end - start);
+}
+
+function createId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function formatNumberedRouteStep(step, index) {
+  const labels = {
+    start: "시작",
+    link: "이동",
+    back: "뒤로",
+  };
+
+  return `${String(index + 1).padStart(2, "0")} ${labels[step.action] ?? "이동"} ${step.title}`;
+}
+
+function calculateScore(elapsedMs, clicks) {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  return Math.max(0, 100000 - clicks * 4000 - seconds * 35);
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, Math.floor(number)));
+}
+
+function cleanRankingText(value, maxLength) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return normalizeWhitespace(value).slice(0, maxLength);
 }
 
 function getErrorMessage(error) {

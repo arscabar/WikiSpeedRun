@@ -1,0 +1,7 @@
+tunnel: <TUNNEL_ID_OR_NAME>
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: wiki-speedrun.example.com
+    service: http://127.0.0.1:3002
+  - service: http_status:404

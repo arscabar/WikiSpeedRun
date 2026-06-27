@@ -556,37 +556,6 @@ a:focus-visible {
   text-align: right;
 }
 
-.challengeHint,
-.mobileChallengeHint {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 36px;
-  border: 1px solid rgba(0, 164, 149, 0.36);
-  border-radius: var(--radius);
-  padding: 0 10px;
-  background: #f0fbf8;
-}
-
-.challengeHint {
-  margin: calc(var(--space) * -1) 0 calc(var(--space) * 2);
-}
-
-.challengeHint span,
-.mobileChallengeHint span {
-  color: var(--track-muted);
-  font-size: 0.74rem;
-  font-weight: 800;
-}
-
-.challengeHint strong,
-.mobileChallengeHint strong {
-  color: var(--track-cyan);
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.78rem;
-}
-
 .primaryAction,
 .ghostAction,
 .secondaryAction {
@@ -761,6 +730,15 @@ code {
 
 .historyList .backStep span {
   color: #6b7278;
+}
+
+.historyList .backlinkStep {
+  border-left-color: var(--track-link);
+  color: var(--track-link);
+}
+
+.historyList .backlinkStep span {
+  color: var(--track-link);
 }
 
 .browserZone {
@@ -964,6 +942,117 @@ code {
   word-break: keep-all;
 }
 
+.backlinkPanel {
+  display: grid;
+  gap: 10px;
+  max-width: 74ch;
+  margin-top: 14px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 12px 0 10px;
+  background: #f8f9fa;
+  overflow: hidden;
+  position: relative;
+}
+
+.backlinkPanel::after {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  bottom: 8px;
+  width: 36px;
+  background: linear-gradient(90deg, rgba(248, 249, 250, 0), #f8f9fa 78%);
+  content: "";
+  pointer-events: none;
+}
+
+.backlinkHeader {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #202122;
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+.backlinkHeader svg {
+  color: var(--track-cyan);
+}
+
+.backlinkHeader strong {
+  font-size: 0.92rem;
+}
+
+.backlinkHeader span {
+  margin-left: auto;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  background: #ffffff;
+  color: var(--track-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.backlinkList {
+  display: grid;
+  grid-auto-columns: max-content;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, minmax(34px, auto));
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  padding: 0 14px 6px 12px;
+  scroll-padding-inline: 12px;
+  scroll-snap-type: x proximity;
+  scrollbar-color: #a7d4ff transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.backlinkButton {
+  scroll-snap-align: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 112px;
+  max-width: clamp(132px, 22vw, 246px);
+  min-height: 32px;
+  border: 1px solid #a7d4ff;
+  border-radius: var(--radius);
+  padding: 0 9px;
+  background: #ffffff;
+  color: var(--track-link);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.backlinkButton:hover {
+  border-color: var(--track-link);
+  background: #eef7ff;
+}
+
+.backlinkButton:focus-visible {
+  outline: 3px solid rgba(6, 99, 187, 0.28);
+  outline-offset: 2px;
+}
+
+.backlinkButton:active {
+  transform: translateY(1px);
+}
+
+.backlinkButton:disabled {
+  color: #6d7480;
+  cursor: not-allowed;
+}
+
 .articleBody {
   display: grid;
   gap: 12px;
@@ -980,6 +1069,60 @@ code {
   color: #202122;
   font-size: 1.32rem;
   line-height: 1.25;
+}
+
+.articleToc {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: #f8f9fa;
+}
+
+.articleTocTitle {
+  color: #202122;
+  font-weight: 900;
+}
+
+.articleToc ol {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.articleToc li {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) 1fr;
+  gap: 8px;
+  align-items: baseline;
+  min-height: 26px;
+  color: #202122;
+}
+
+.articleToc li.tocLevel2 {
+  padding-left: 18px;
+}
+
+.articleToc li.tocLevel3 {
+  padding-left: 36px;
+}
+
+.articleToc li.tocLevel4 {
+  padding-left: 54px;
+}
+
+.articleToc li span {
+  color: var(--track-link);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.articleToc li strong {
+  font-size: 0.9rem;
 }
 
 .articleBody p {
@@ -1441,6 +1584,11 @@ code {
   stroke: #899197;
 }
 
+.routeStepNumber.backlinkStep {
+  fill: #eef7ff;
+  stroke: var(--track-link);
+}
+
 .routeStepIndex,
 .routeActionLabel,
 .routeTitle {
@@ -1470,6 +1618,10 @@ code {
 
 .routeActionLabel.backStep {
   fill: #6b7278;
+}
+
+.routeActionLabel.backlinkStep {
+  fill: var(--track-link);
 }
 
 .routeTitle {
@@ -1888,6 +2040,40 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .backlinkPanel {
+    max-width: 100%;
+  }
+
+  .backlinkList {
+    grid-auto-columns: minmax(138px, max-content);
+    grid-template-rows: repeat(2, minmax(42px, auto));
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .backlinkButton {
+    max-width: min(58vw, 260px);
+    min-height: 42px;
+    padding: 0 11px;
+    font-size: 0.84rem;
+  }
+
+  .articleToc li {
+    grid-template-columns: minmax(48px, auto) minmax(0, 1fr);
+  }
+
+  .articleToc li.tocLevel2 {
+    padding-left: 12px;
+  }
+
+  .articleToc li.tocLevel3 {
+    padding-left: 24px;
+  }
+
+  .articleToc li.tocLevel4 {
+    padding-left: 36px;
+  }
+
   .factCell {
     min-height: 58px;
     border-right: 0;
@@ -1981,6 +2167,37 @@ code {
 
   .mobileStats div:nth-last-child(-n + 2) {
     border-bottom: 0;
+  }
+
+  .backlinkPanel::after {
+    width: 24px;
+  }
+
+  .backlinkList {
+    grid-auto-columns: minmax(152px, max-content);
+    grid-template-rows: minmax(44px, auto);
+  }
+
+  .backlinkButton {
+    max-width: 76vw;
+    min-height: 44px;
+  }
+
+  .articleToc {
+    padding: 10px;
+  }
+
+  .articleToc li {
+    grid-template-columns: minmax(42px, auto) minmax(0, 1fr);
+  }
+
+  .articleToc li.tocLevel2 {
+    padding-left: 8px;
+  }
+
+  .articleToc li.tocLevel3,
+  .articleToc li.tocLevel4 {
+    padding-left: 16px;
   }
 }
 

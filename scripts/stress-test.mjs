@@ -16,12 +16,13 @@ for (let index = 1; index <= runs; index += 1) {
     target: "",
     startLinks: 0,
     targetLinks: 0,
+    targetInboundLinks: 0,
     targetExists: false,
-    targetReachableClaimed: false,
-    verifiedClicks: 0,
+    impossiblePairExcluded: false,
     playerCreated: false,
     runCreated: false,
     validClickAllowed: false,
+    backlinkAllowed: false,
     invalidClickBlocked: false,
     backAllowed: false,
     completionAccepted: false,
@@ -88,6 +89,28 @@ for (let index = 1; index <= runs; index += 1) {
           })
         : { allowed: validEvent.completed ? true : false };
 
+    const backlinkTarget = targetArticle.backlinkSources?.find((link) => link !== challenge.target) ?? "";
+    const backlinkRunResponse = backlinkTarget
+      ? await readJson("/api/runs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            playerId,
+            start: challenge.target,
+            target: backlinkTarget,
+            mode: "casual",
+            allRandom: false,
+          }),
+        })
+      : { run: { id: "" } };
+    const backlinkEvent = backlinkTarget
+      ? await readJson(`/api/runs/${backlinkRunResponse.run.id}/link`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ to: backlinkTarget, via: "backlink" }),
+        })
+      : { allowed: false, run: { routeSteps: [] } };
+
     const rankingTarget =
       startArticle.outgoingLinks.find((link) => link !== challenge.start) ?? startArticle.outgoingLinks[0];
     const rankingRunResponse = await readJson("/api/runs", {
@@ -113,12 +136,15 @@ for (let index = 1; index <= runs; index += 1) {
 
     result.start = challenge.start;
     result.target = challenge.target;
-    result.verifiedClicks = challenge.verifiedClicks ?? 0;
     result.startLinks = startArticle.outgoingLinks.length;
     result.targetLinks = targetArticle.outgoingLinks.length;
+    result.targetInboundLinks = Number(challenge.targetInboundLinks ?? 0);
     result.targetExists = Boolean(targetArticle.title);
-    result.targetReachableClaimed = challenge.source === "namu.wiki/random-walk" && result.verifiedClicks > 0;
+    result.impossiblePairExcluded =
+      challenge.source === "namu.wiki/random-independent" && result.targetInboundLinks > 0;
     result.validClickAllowed = Boolean(validEvent.allowed);
+    result.backlinkAllowed =
+      Boolean(backlinkEvent.allowed) && backlinkEvent.run?.routeSteps?.at(-1)?.action === "backlink";
     result.invalidClickBlocked = invalidEvent.allowed === false;
     result.backAllowed = Boolean(backEvent.allowed);
     result.completionAccepted = Boolean(completionEvent.completed && completionEvent.ranking?.accepted);
@@ -130,11 +156,11 @@ for (let index = 1; index <= runs; index += 1) {
       result.start !== result.target &&
       result.startLinks > 0 &&
       result.targetExists &&
-      result.targetLinks > 0 &&
-      result.targetReachableClaimed &&
+      result.impossiblePairExcluded &&
       result.playerCreated &&
       result.runCreated &&
       result.validClickAllowed &&
+      result.backlinkAllowed &&
       result.invalidClickBlocked &&
       result.backAllowed &&
       result.completionAccepted &&

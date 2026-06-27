@@ -45,9 +45,9 @@ Use a WebView/Electron wrapper for window control, fullscreen/kiosk mode, shortc
 
 - Node API for records, challenges, rooms, and replay metadata.
 - WebSocket gateway for local/LAN room state: current document, click count, finish event, spectators, and room lifecycle.
-- Namuwiki fetch/proxy service that strips search, sidebars, backlinks, scripts, editable controls, and non-body links before returning structured content.
-- Challenge generator that calls Namuwiki random/document endpoints, keeps only existing normal `/w/` document pages, then verifies reachability by following sanitized body links.
-- Challenge generation does not calculate difficulty or shortest path. It only guarantees that at least one server-verified click path exists and exposes the verified click count, not the hidden route.
+- Namuwiki fetch/proxy service that strips search, sidebars, scripts, editable controls, and unsupported links before returning structured body, table-of-contents, and backlink data.
+- Challenge generator that calls Namuwiki random/document endpoints, keeps only existing normal `/w/` document pages, and verifies that the target has at least one backlink row of type `(link)`.
+- Challenge generation does not calculate difficulty, shortest path, or a guaranteed route from the selected start to target. It only excludes target documents that cannot be entered from any other document link.
 
 Implemented MVP endpoints:
 
@@ -58,7 +58,7 @@ Implemented MVP endpoints:
 - `GET /api/article?title=사과`
 - `POST /api/run/event` with `{ "from": "사과", "to": "사과나무" }`
 
-The local parser currently keeps `.wiki-heading` and non-table `.wiki-paragraph` blocks, converts `.wiki-link-internal` anchors into controlled in-game buttons, and caches parsed articles for 12 hours under `data/cache/articles`.
+The local parser currently keeps `.wiki-heading` and non-table `.wiki-paragraph` blocks, converts `.wiki-link-internal` anchors into controlled in-game buttons, and caches parsed articles/backlinks for 12 hours under `data/cache/`.
 
 ### Storage
 
@@ -70,7 +70,7 @@ The local parser currently keeps `.wiki-heading` and non-table `.wiki-paragraph`
 
 - No editable URL or search input in the client.
 - No client-side back navigation in the game shell.
-- Server validates that each next document was linked from the previous sanitized document.
+- Server validates that each next document was linked from the previous sanitized body links or appeared in the previous document's backlink list.
 - Completed runs store the full route with timestamps for replay and moderation.
 - Ranking sorts by click count first, then elapsed time for ties.
 

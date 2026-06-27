@@ -57,6 +57,10 @@ type ArticleBlock =
   | {
       type: "paragraph";
       segments: Segment[];
+    }
+  | {
+      type: "toc";
+      items: TocItem[];
     };
 
 type ApiArticle = {
@@ -66,6 +70,7 @@ type ApiArticle = {
   fetchedAt: string;
   blocks: ArticleBlock[];
   outgoingLinks: string[];
+  backlinkSources: string[];
   facts: Array<{ label: string; value: string }>;
 };
 
@@ -75,7 +80,6 @@ type Challenge = {
   label: string;
   generatedAt: string;
   source: string;
-  verifiedClicks?: number;
 };
 
 type RankingMode = "clicks" | "time" | "score";
@@ -91,7 +95,7 @@ type RunMeta = {
 
 type RouteStep = {
   title: string;
-  action: "start" | "link" | "back";
+  action: "start" | "link" | "backlink" | "back";
 };
 
 type CompletionRecord = {
@@ -182,6 +186,18 @@ type RenderSegment = Segment & {
   parts: FindPart[];
 };
 
+type TocItem = {
+  number: string;
+  label: string;
+  level: number;
+  anchor?: string;
+};
+
+type RenderTocItem = TocItem & {
+  numberParts: FindPart[];
+  labelParts: FindPart[];
+};
+
 type RenderBlock =
   | {
       type: "heading";
@@ -191,13 +207,17 @@ type RenderBlock =
   | {
       type: "paragraph";
       segments: RenderSegment[];
+    }
+  | {
+      type: "toc";
+      items: RenderTocItem[];
     };
 
 const fairnessItems = [
   { icon: SearchX, label: "주소 검색 잠금", state: "LOCK" },
   { icon: ArrowLeft, label: "뒤로가기 허용", state: "ON" },
   { icon: Search, label: "본문 찾기", state: "ON" },
-  { icon: LockKeyhole, label: "URL 봉인", state: "ON" },
+  { icon: LockKeyhole, label: "링크/역링크만", state: "ON" },
 ];
 
 const modeLabels: Record<Mode, string> = {
@@ -213,6 +233,7 @@ const randomRunLabels = {
 const routeActionLabels: Record<RouteStep["action"], string> = {
   start: "시작",
   link: "이동",
+  backlink: "역링크",
   back: "뒤로",
 };
 
@@ -292,7 +313,15 @@ function formatRouteStepLabel(step: RouteStep, index: number) {
     return step.title;
   }
 
-  return step.action === "back" ? `↩ ${step.title}` : step.title;
+  if (step.action === "back") {
+    return `↩ ${step.title}`;
+  }
+
+  if (step.action === "backlink") {
+    return `↗ ${step.title}`;
+  }
+
+  return step.title;
 }
 
 function formatNumberedRouteStep(step: RouteStep, index: number) {
@@ -560,6 +589,17 @@ function App() {
         return { ...block, parts: createParts(block.text) };
       }
 
+      if (block.type === "toc") {
+        return {
+          ...block,
+          items: block.items.map((item) => ({
+            ...item,
+            numberParts: createParts(item.number),
+            labelParts: createParts(item.label),
+          })),
+        };
+      }
+
       return {
         ...block,
         segments: block.segments.map((segment) => ({
@@ -722,7 +762,6 @@ function App() {
         label: payload.run.status === "finished" ? "복구된 완주 기록" : "복구된 제시어",
         generatedAt: payload.run.startedAt,
         source: "server-run-restore",
-        verifiedClicks: Math.max(0, payload.run.routeSteps.length - 1),
       };
 
       setPlayerId(payload.run.playerId);
@@ -1098,7 +1137,7 @@ function App() {
     }
   }, [applyServerRun, history.length, isLoading, isNavigating, loadArticle, runId]);
 
-  const navigateToArticle = async (title: string) => {
+  const navigateToArticle = async (title: string, via: "link" | "backlink" = "link") => {
     if (!article || !challenge || !runId || isComplete || isNavigating) {
       return;
     }
@@ -1110,7 +1149,7 @@ function App() {
       const event = await readJson<RunResponse>(`/api/runs/${encodeURIComponent(runId)}/link`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ to: title }),
+        body: JSON.stringify({ to: title, via }),
       });
 
       if (!event.allowed) {
@@ -1600,10 +1639,6 @@ function App() {
                 <GitBranch aria-hidden="true" size={18} />
                 <strong>{challenge?.target ?? "-"}</strong>
               </div>
-              <div className="challengeHint">
-                <span>도달 검증</span>
-                <strong>{challenge?.verifiedClicks ? `${challenge.verifiedClicks}클릭 경로 존재` : "수동 제시어"}</strong>
-              </div>
               <button className="primaryAction" type="button" disabled={isLoading} onClick={() => startChallenge(mode)}>
                 <Shuffle aria-hidden="true" size={18} />
                 <span>새 제시어</span>
@@ -1663,7 +1698,9 @@ function App() {
                 {routeSteps.map((step, index) => (
                   <li
                     key={`${step.title}-${step.action}-${index}`}
-                    className={`${index === routeSteps.length - 1 ? "current" : ""}${step.action === "back" ? " backStep" : ""}`}
+                    className={`${index === routeSteps.length - 1 ? "current" : ""}${step.action === "back" ? " backStep" : ""}${
+                      step.action === "backlink" ? " backlinkStep" : ""
+                    }`}
                   >
                     <span>{String(index + 1).padStart(2, "0")}</span>
                     <strong>{formatRouteStepLabel(step, index)}</strong>
@@ -1678,10 +1715,6 @@ function App() {
               <span>{challenge?.start ?? "-"}</span>
               <GitBranch aria-hidden="true" size={17} />
               <strong>{challenge?.target ?? "-"}</strong>
-            </div>
-            <div className="mobileChallengeHint">
-              <span>도달 검증</span>
-              <strong>{challenge?.verifiedClicks ? `${challenge.verifiedClicks}클릭 경로 존재` : "수동 제시어"}</strong>
             </div>
             <div className="mobileStats">
               <div>
@@ -1873,12 +1906,51 @@ function App() {
                       </div>
                     ))}
                   </div>
+                  {article.backlinkSources.length > 0 && (
+                    <section className="backlinkPanel" aria-label="역링크 이동">
+                      <div className="backlinkHeader">
+                        <GitBranch aria-hidden="true" size={17} />
+                        <strong>역링크</strong>
+                        <span>{article.backlinkSources.length}</span>
+                      </div>
+                      <div className="backlinkList">
+                        {article.backlinkSources.slice(0, 48).map((source) => (
+                          <button
+                            className="backlinkButton"
+                            key={source}
+                            type="button"
+                            aria-label={`역링크로 ${source} 이동`}
+                            title={source}
+                            disabled={isComplete || isNavigating}
+                            onClick={() => navigateToArticle(source, "backlink")}
+                          >
+                            {source}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   <div className="articleBody">
                     {findResult.blocks.map((block, blockIndex) =>
                       block.type === "heading" ? (
                         <h3 className="articleHeading" key={`${block.text}-${blockIndex}`}>
                           {renderFindParts(block.parts, activeFindIndex)}
                         </h3>
+                      ) : block.type === "toc" ? (
+                        <nav className="articleToc" aria-label="문서 목차" key={`toc-${article.title}-${blockIndex}`}>
+                          <div className="articleTocTitle">목차</div>
+                          <ol>
+                            {block.items.map((item, itemIndex) => (
+                              <li className={`tocLevel${Math.max(1, Math.min(4, item.level))}`} key={`${item.number}-${item.label}-${itemIndex}`}>
+                                <span>
+                                  {renderFindParts(item.numberParts, activeFindIndex)}
+                                  {item.number ? ". " : ""}
+                                </span>
+                                <strong>{renderFindParts(item.labelParts, activeFindIndex)}</strong>
+                              </li>
+                            ))}
+                          </ol>
+                        </nav>
                       ) : (
                         <p key={`${article.title}-${blockIndex}`}>
                           {block.segments.map((segment, segmentIndex) =>
@@ -2186,7 +2258,8 @@ function RouteGraph({ steps, target }: { steps: RouteStep[]; target: string }) {
         const y = firstY + index * rowGap;
         const isTarget = step.title === target;
         const isBack = step.action === "back";
-        const stepClass = `${isTarget ? " targetStep" : ""}${isBack ? " backStep" : ""}`;
+        const isBacklink = step.action === "backlink";
+        const stepClass = `${isTarget ? " targetStep" : ""}${isBack ? " backStep" : ""}${isBacklink ? " backlinkStep" : ""}`;
 
         return (
           <g className="routeStep" key={`${step.title}-${step.action}-${index}`}>

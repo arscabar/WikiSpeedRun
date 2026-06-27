@@ -2,7 +2,7 @@
 
 나무위키 문서 링크만 눌러 출발 문서에서 목표 문서까지 최대한 빠르게 도달하는 로컬 전용 스피드런 앱입니다.
 
-주소창 입력, 검색, 브라우저 뒤로 가기 같은 우회 동작을 막고, 서비스 내부에서 정제한 본문 링크만 클릭할 수 있게 만든 것이 핵심입니다.
+주소창 입력, 검색, 브라우저 뒤로 가기 같은 우회 동작을 막고, 서비스 내부에서 정제한 본문 링크와 역링크만 클릭할 수 있게 만든 것이 핵심입니다.
 
 ![desktop race](docs/images/desktop-live.png)
 
@@ -108,12 +108,11 @@ npm run dist:win
 
 빌드가 끝나면 아래 파일이 생성됩니다.
 
-- `release/WikiSpeedRun-0.1.2-portable.exe`
-- `release/WikiSpeedRun-0.1.3-portable.exe`
+- `release/WikiSpeedRun-0.1.4-portable.exe`
 - `release/WikiSpeedRun-win32-x64/WikiSpeedRun.exe`
-- `release/WikiSpeedRun-0.1.3-cloudflare.zip`
+- `release/WikiSpeedRun-0.1.4-cloudflare.zip`
 
-portable EXE 하나만 실행해도 내부 Node 서버와 Electron 창이 함께 실행됩니다. 외부 공유까지 포함한 배포는 `WikiSpeedRun-0.1.3-cloudflare.zip` 하나만 받으면 됩니다.
+portable EXE 하나만 실행해도 내부 Node 서버와 Electron 창이 함께 실행됩니다. 외부 공유까지 포함한 배포는 `WikiSpeedRun-0.1.4-cloudflare.zip` 하나만 받으면 됩니다.
 
 앱이 새로 시작될 때 이전 WikiSpeedRun 로컬 서버와 같은 포트의 Cloudflare 터널을 정리합니다. ZIP의 Cloudflare 시작 스크립트도 이전 터널을 먼저 닫고 새 터널 주소를 앱에 자동 반영합니다.
 
@@ -147,8 +146,9 @@ portable EXE 하나만 실행해도 내부 Node 서버와 Electron 창이 함께
 - `POST /api/runs/:runId/back`
 - `POST /api/runs/:runId/finish`
 
-문서 파싱 결과는 `data/cache/articles`에 12시간 캐시됩니다.
-자동 제시어는 서버가 시작 문서의 실제 본문 링크를 따라 랜덤 워크로 도달한 문서만 목표어로 지정합니다. 정답 경로는 클라이언트에 내려주지 않고, 검증된 클릭 수만 표시합니다.
+문서와 역링크 파싱 결과는 `data/cache/`에 12시간 캐시됩니다.
+자동 제시어는 시작어와 목표어를 서로 독립적으로 랜덤 추출합니다. 목표어는 나무위키 역링크에서 실제 `(link)` 유입이 있는 문서만 사용해, 고립 문서처럼 애초에 클릭으로 들어갈 수 없는 목표어를 생성 단계에서 제외합니다.
+플레이 중 이동은 현재 문서의 본문 링크와 역링크 목록에서만 허용되며, 서버가 매 클릭마다 허용 여부를 검증합니다.
 랭킹은 서버가 켜진 순간부터 메모리에 적재되며, 서버를 재시작하면 초기화됩니다. Cloudflare Tunnel로 접속한 사용자도 같은 서버 세션 랭킹을 함께 봅니다.
 완주 기록은 클라이언트가 직접 제출하지 않고, 서버가 `runId`별 이동 로그와 서버 기준 경과 시간으로 확정합니다.
 
@@ -167,7 +167,8 @@ score = max(0, 100000 - clicks * 4000 - elapsedSeconds * 35)
 - `npm run build`: 통과
 - Windows portable EXE 실행: 통과
 - UI 완주 3회: `사과 -> 사과나무`, 1클릭 완주
-- 랜덤 제시어 5회: 시작/목표 모두 실제 나무위키 문서이며 서버 검증 클릭 경로 존재 확인
+- 랜덤 제시어 5회: 시작/목표 모두 실제 나무위키 문서이며 목표어 역링크 유입 확인
+- 역링크 이동: 서버 검증과 이동 기록 `역링크` 표기 확인
 - 모드 전환: 캐주얼, 연습 통과
 - 아예랜덤: 룰과 제시어 랜덤 설정 통과
 - 공유 문구, 결과 이미지, 랭킹 정렬, 세션 코드 버튼 통과

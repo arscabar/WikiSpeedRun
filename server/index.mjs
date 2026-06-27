@@ -9,26 +9,26 @@ import { cleanupWikiSpeedRunProcesses } from "./process-cleanup.mjs";
 
 const NAMU_ORIGIN = "https://namu.wiki";
 const DEFAULT_PORT = Number(process.env.WSR_API_PORT ?? process.env.WSR_PORT ?? 3002);
+const ARTICLE_SCHEMA_VERSION = 2;
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 const RANDOM_ATTEMPTS = 36;
-const LINKED_CHALLENGE_ATTEMPTS = 24;
-const LINK_CANDIDATE_SAMPLE_SIZE = 32;
+const CHALLENGE_ATTEMPTS = 36;
 const MIN_START_LINKS = 8;
 const MIN_START_BLOCKS = 2;
-const MIN_TARGET_LINKS = 1;
+const MIN_TARGET_LINKS = 0;
 const MIN_TARGET_BLOCKS = 2;
-const MIN_INTERMEDIATE_LINKS = 4;
-const MIN_INTERMEDIATE_BLOCKS = 1;
+const MIN_TARGET_BACKLINKS = 1;
 const MAX_RANKING_RECORDS = 200;
 const MAX_ROUTE_STEPS = 80;
 const VALID_MODES = new Set(["casual", "practice"]);
-const VALID_STEP_ACTIONS = new Set(["start", "link", "back"]);
+const VALID_STEP_ACTIONS = new Set(["start", "link", "backlink", "back"]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = process.env.WSR_DATA_DIR ? path.resolve(process.env.WSR_DATA_DIR) : path.join(rootDir, "data");
 const cacheDir = path.join(dataDir, "cache");
 const articleCacheDir = path.join(cacheDir, "articles");
+const backlinkCacheDir = path.join(cacheDir, "backlinks");
 const challengeLogPath = path.join(cacheDir, "challenges.json");
 const distDir = process.env.WSR_DIST_DIR ? path.resolve(process.env.WSR_DIST_DIR) : path.join(rootDir, "dist");
 
@@ -149,6 +149,7 @@ app.get("/api/runs/:runId", (req, res) => {
 app.post("/api/runs/:runId/link", async (req, res) => {
   const run = activeRuns.get(req.params.runId);
   const to = normalizeTitle(typeof req.body?.to === "string" ? req.body.to : "");
+  const requestedVia = req.body?.via === "backlink" ? "backlink" : "link";
 
   if (!run || !to) {
     res.status(run ? 400 : 404).json({ allowed: false, error: run ? "missing_to" : "run_not_found" });
@@ -162,15 +163,19 @@ app.post("/api/runs/:runId/link", async (req, res) => {
 
   try {
     const article = await getArticle(run.currentTitle);
-    const allowed = article.outgoingLinks.includes(to);
+    const backlinkSources = await getBacklinkSources(article.title);
+    const viaBodyLink = article.outgoingLinks.includes(to);
+    const viaBacklink = backlinkSources.includes(to);
+    const allowed = viaBodyLink || viaBacklink;
 
     if (!allowed) {
       res.json({ allowed: false, from: run.currentTitle, to, run: publicRun(run) });
       return;
     }
 
+    const action = requestedVia === "backlink" && viaBacklink ? "backlink" : viaBodyLink ? "link" : "backlink";
     run.documentStack.push(to);
-    run.routeSteps.push({ title: to, action: "link" });
+    run.routeSteps.push({ title: to, action });
     run.currentTitle = to;
     run.updatedAt = new Date().toISOString();
 
@@ -180,6 +185,7 @@ app.post("/api/runs/:runId/link", async (req, res) => {
     res.json({
       allowed: true,
       completed,
+      action,
       from: article.title,
       to,
       run: publicRun(run),
@@ -244,8 +250,14 @@ app.get("/api/challenge", async (req, res) => {
     if (requestedStart && requestedTarget) {
       const startArticle = await getArticle(requestedStart);
       const targetArticle = await getArticle(requestedTarget);
+      const targetBacklinks = await getBacklinkSources(targetArticle.title);
 
-      if (requestedStart === requestedTarget || !isPlayableStartArticle(startArticle) || !isPlayableTargetArticle(targetArticle)) {
+      if (
+        requestedStart === requestedTarget ||
+        !isPlayableStartArticle(startArticle) ||
+        !isPlayableTargetArticle(targetArticle) ||
+        targetBacklinks.length < MIN_TARGET_BACKLINKS
+      ) {
         res.status(400).json({ error: "invalid_challenge_override" });
         return;
       }
@@ -256,7 +268,7 @@ app.get("/api/challenge", async (req, res) => {
         label: "테스트 제시어",
         generatedAt: new Date().toISOString(),
         source: "query-override",
-        verifiedClicks: startArticle.outgoingLinks.includes(requestedTarget) ? 1 : 0,
+        targetInboundLinks: targetBacklinks.length,
       };
 
       await appendChallengeLog(challenge);
@@ -264,7 +276,7 @@ app.get("/api/challenge", async (req, res) => {
       return;
     }
 
-    const challenge = await createReachableChallenge(mode);
+    const challenge = await createIndependentChallenge(mode);
 
     await appendChallengeLog(challenge);
     res.json(challenge);
@@ -283,7 +295,7 @@ app.get("/api/article", async (req, res) => {
   }
 
   try {
-    const article = await getArticle(title, req.query.refresh === "1");
+    const article = await getArticleForClient(title, req.query.refresh === "1");
     res.json(article);
   } catch (error) {
     console.error(error);
@@ -295,6 +307,7 @@ app.get("/api/article", async (req, res) => {
 app.post("/api/run/event", async (req, res) => {
   const from = typeof req.body?.from === "string" ? req.body.from.trim() : "";
   const to = typeof req.body?.to === "string" ? req.body.to.trim() : "";
+  const requestedVia = req.body?.via === "backlink" ? "backlink" : "link";
 
   if (!from || !to) {
     res.status(400).json({ allowed: false, error: "missing_from_or_to" });
@@ -303,10 +316,14 @@ app.post("/api/run/event", async (req, res) => {
 
   try {
     const article = await getArticle(from);
-    const allowed = article.outgoingLinks.includes(to);
+    const backlinkSources = await getBacklinkSources(article.title);
+    const viaBodyLink = article.outgoingLinks.includes(to);
+    const viaBacklink = backlinkSources.includes(to);
+    const allowed = viaBodyLink || viaBacklink;
 
     res.json({
       allowed,
+      action: requestedVia === "backlink" && viaBacklink ? "backlink" : viaBodyLink ? "link" : viaBacklink ? "backlink" : "",
       from,
       to,
       checkedAt: new Date().toISOString(),
@@ -437,125 +454,79 @@ if (isDirectRun) {
 
 export { app, clearExternalShareLink, setExternalShareLink, startServer };
 
-async function createReachableChallenge(mode) {
+async function createIndependentChallenge(mode) {
   let lastError = "";
 
-  for (let attempt = 0; attempt < LINKED_CHALLENGE_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < CHALLENGE_ATTEMPTS; attempt += 1) {
     try {
       const start = await pickRandomDocument("", { minBlocks: MIN_START_BLOCKS, minLinks: MIN_START_LINKS });
-      const route = await pickReachableRoute(start.title, mode);
-      const target = route[route.length - 1];
+      const target = await pickRandomInboundTarget(start.title);
 
-      if (route.length < 2 || target === start.title) {
+      if (!target || target.title === start.title) {
         continue;
       }
 
       return {
         start: start.title,
-        target,
+        target: target.title,
         label: getChallengeLabel(mode),
         generatedAt: new Date().toISOString(),
-        source: "namu.wiki/random-walk",
-        verifiedClicks: route.length - 1,
+        source: "namu.wiki/random-independent",
+        targetInboundLinks: target.inboundLinks,
       };
     } catch (error) {
       lastError = getErrorMessage(error);
     }
   }
 
-  throw new Error(`Could not create a reachable challenge. ${lastError}`);
+  throw new Error(`Could not create an inbound-linked challenge. ${lastError}`);
 }
 
-async function pickReachableRoute(startTitle, mode) {
-  const { min, max } = getChallengeDepthRange(mode);
-  const targetDepth = randomInteger(min, max);
-  const route = [startTitle];
-  const visited = new Set(route);
-  let currentTitle = startTitle;
+async function pickRandomInboundTarget(exceptTitle) {
+  let lastTitle = "";
 
-  for (let depth = 0; depth < targetDepth; depth += 1) {
-    const currentArticle = await getArticle(currentTitle);
-    const isTargetStep = depth === targetDepth - 1;
-    const nextArticle = await pickLinkedArticle(currentArticle, visited, {
-      minBlocks: isTargetStep ? MIN_TARGET_BLOCKS : MIN_INTERMEDIATE_BLOCKS,
-      minLinks: isTargetStep ? MIN_TARGET_LINKS : MIN_INTERMEDIATE_LINKS,
-    });
+  for (let attempt = 0; attempt < RANDOM_ATTEMPTS; attempt += 1) {
+    const title = await fetchRandomTitle();
+    lastTitle = title;
 
-    if (!nextArticle) {
-      throw new Error(`No playable linked article from ${currentArticle.title}`);
+    if (title === exceptTitle || !isNormalDocumentTitle(title)) {
+      continue;
     }
 
-    route.push(nextArticle.title);
-    visited.add(nextArticle.title);
-    currentTitle = nextArticle.title;
-  }
-
-  return route;
-}
-
-async function pickLinkedArticle(article, visited, constraints) {
-  const candidates = shuffleValues(
-    article.outgoingLinks
-      .map(normalizeTitle)
-      .filter((title) => title && title !== article.title && !visited.has(title) && isNormalDocumentTitle(title)),
-  ).slice(0, LINK_CANDIDATE_SAMPLE_SIZE);
-
-  for (const candidate of candidates) {
     try {
-      const linkedArticle = await getArticle(candidate);
+      const article = await getArticle(title);
 
-      if (!visited.has(linkedArticle.title) && isPlayableArticle(linkedArticle, constraints)) {
-        return linkedArticle;
+      if (article.title === exceptTitle || !isPlayableTargetArticle(article)) {
+        continue;
+      }
+
+      const backlinks = await getBacklinkSources(article.title);
+
+      if (backlinks.length >= MIN_TARGET_BACKLINKS) {
+        return { title: article.title, inboundLinks: backlinks.length };
       }
     } catch {
-      // Skip broken, blocked, or unsupported links and try another body link.
+      // Keep sampling until the target is an existing article with at least one body-link backlink.
     }
   }
 
-  return null;
-}
-
-function getChallengeDepthRange(mode) {
-  if (mode === "practice") {
-    return { min: 1, max: 2 };
-  }
-
-  if (mode === "wild") {
-    return { min: 2, max: 4 };
-  }
-
-  return { min: 2, max: 3 };
+  throw new Error(`Could not pick an inbound-linked target. Last candidate: ${lastTitle || "none"}`);
 }
 
 function getChallengeLabel(mode) {
   if (mode === "wild") {
-    return "아예랜덤 경로보장 제시어";
+    return "아예랜덤 제시어";
   }
 
   if (mode === "practice") {
-    return "연습 경로보장 제시어";
+    return "연습 랜덤 제시어";
   }
 
   if (mode === "casual") {
-    return "캐주얼 경로보장 제시어";
+    return "캐주얼 랜덤 제시어";
   }
 
-  return "경로보장 제시어";
-}
-
-function randomInteger(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function shuffleValues(values) {
-  const output = [...values];
-
-  for (let index = output.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [output[index], output[swapIndex]] = [output[swapIndex], output[index]];
-  }
-
-  return output;
+  return "랜덤 제시어";
 }
 
 async function pickRandomDocument(exceptTitle, { minBlocks = 1, minLinks = 0 } = {}) {
@@ -604,7 +575,7 @@ async function getArticle(title, refresh = false) {
 
   if (!refresh) {
     const cached = await readFreshJson(cachePath);
-    if (cached) {
+    if (cached?.parserVersion === ARTICLE_SCHEMA_VERSION) {
       return cached;
     }
   }
@@ -612,6 +583,80 @@ async function getArticle(title, refresh = false) {
   const article = await fetchAndParseArticle(normalizedTitle);
   await writeJson(cachePath, article);
   return article;
+}
+
+async function getArticleForClient(title, refresh = false) {
+  const article = await getArticle(title, refresh);
+  const backlinkSources = await getBacklinkSources(article.title, refresh);
+
+  return {
+    ...article,
+    backlinkSources,
+    facts: [
+      ...article.facts.filter((fact) => fact.label !== "역링크"),
+      { label: "역링크", value: String(backlinkSources.length) },
+    ],
+  };
+}
+
+async function getBacklinkSources(title, refresh = false) {
+  const normalizedTitle = normalizeTitle(title);
+  const cachePath = path.join(backlinkCacheDir, `${cacheKey(normalizedTitle)}.json`);
+
+  if (!refresh) {
+    const cached = await readFreshJson(cachePath);
+    if (Array.isArray(cached?.sources)) {
+      return cached.sources;
+    }
+  }
+
+  const sources = await fetchAndParseBacklinkSources(normalizedTitle);
+  await writeJson(cachePath, {
+    title: normalizedTitle,
+    fetchedAt: new Date().toISOString(),
+    sources,
+  });
+  return sources;
+}
+
+async function fetchAndParseBacklinkSources(title) {
+  if (!isNormalDocumentTitle(title)) {
+    return [];
+  }
+
+  const response = await fetch(`${NAMU_ORIGIN}/backlink/${encodeURIComponent(title)}`, {
+    redirect: "follow",
+    headers: requestHeaders(),
+  });
+
+  if (response.status === 404) {
+    return [];
+  }
+
+  if (!response.ok) {
+    throw new Error(`Namuwiki backlinks responded with ${response.status} for ${title}`);
+  }
+
+  const html = await response.text();
+  const $ = cheerio.load(html);
+  const sources = new Set();
+
+  $("li").each((_, element) => {
+    const node = $(element);
+    const rowText = normalizeWhitespace(node.text());
+
+    if (!rowText.includes("(link)")) {
+      return;
+    }
+
+    const sourceTitle = titleFromNamuPath(node.find('a[href^="/w/"]').first().attr("href") ?? "");
+
+    if (sourceTitle && sourceTitle !== title && isNormalDocumentTitle(sourceTitle)) {
+      sources.add(sourceTitle);
+    }
+  });
+
+  return Array.from(sources).sort((a, b) => a.localeCompare(b, "ko"));
 }
 
 async function fetchAndParseArticle(title) {
@@ -659,6 +704,25 @@ function parseArticleHtml(html, requestedTitle, sourceUrl) {
       return;
     }
 
+    if (node.hasClass("wiki-paragraph") && node.find(".wiki-macro-toc").length > 0) {
+      const tocItems = parseTocItems($, node.find(".wiki-macro-toc").first());
+
+      if (tocItems.length > 0) {
+        blocks.push({ type: "toc", items: tocItems });
+      }
+
+      const paragraphWithoutToc = node.clone();
+      paragraphWithoutToc.find(".wiki-macro-toc").remove();
+      const remainingSegments = extractSegments($, paragraphWithoutToc.get(0), outgoing);
+      const remainingText = normalizeWhitespace(remainingSegments.map((segment) => segment.value ?? segment.label).join(""));
+
+      if (remainingText.length >= 2) {
+        blocks.push({ type: "paragraph", segments: remainingSegments });
+      }
+
+      return;
+    }
+
     if (node.hasClass("wiki-heading")) {
       const text = normalizeWhitespace(node.text().replace(/\[편집\]/g, ""));
       if (text) {
@@ -685,6 +749,7 @@ function parseArticleHtml(html, requestedTitle, sourceUrl) {
   }
 
   return {
+    parserVersion: ARTICLE_SCHEMA_VERSION,
     title,
     sourceUrl,
     updated,
@@ -697,6 +762,35 @@ function parseArticleHtml(html, requestedTitle, sourceUrl) {
       { label: "블록", value: String(blocks.length) },
     ],
   };
+}
+
+function parseTocItems($, tocElement) {
+  const items = [];
+
+  tocElement.find(".toc-item").each((_, element) => {
+    const node = $(element);
+    const sectionLink = node.children('a[href^="#s-"]').first();
+    const number = normalizeWhitespace(sectionLink.text());
+    const rawText = normalizeWhitespace(node.text());
+    let label = rawText;
+
+    if (number && label.startsWith(number)) {
+      label = label.slice(number.length).replace(/^\.\s*/, "").trim();
+    }
+
+    if (!number && !label) {
+      return;
+    }
+
+    items.push({
+      number,
+      label,
+      level: Math.max(1, Math.min(4, node.parents(".toc-indent").length)),
+      anchor: (sectionLink.attr("href") ?? "").replace(/^#/, ""),
+    });
+  });
+
+  return items;
 }
 
 function extractSegments($, element, outgoing) {
@@ -1027,6 +1121,7 @@ function formatNumberedRouteStep(step, index) {
   const labels = {
     start: "시작",
     link: "이동",
+    backlink: "역링크",
     back: "뒤로",
   };
 

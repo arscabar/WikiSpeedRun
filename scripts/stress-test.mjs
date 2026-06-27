@@ -17,6 +17,8 @@ for (let index = 1; index <= runs; index += 1) {
     startLinks: 0,
     targetLinks: 0,
     targetExists: false,
+    targetReachableClaimed: false,
+    verifiedClicks: 0,
     playerCreated: false,
     runCreated: false,
     validClickAllowed: false,
@@ -111,9 +113,11 @@ for (let index = 1; index <= runs; index += 1) {
 
     result.start = challenge.start;
     result.target = challenge.target;
+    result.verifiedClicks = challenge.verifiedClicks ?? 0;
     result.startLinks = startArticle.outgoingLinks.length;
     result.targetLinks = targetArticle.outgoingLinks.length;
     result.targetExists = Boolean(targetArticle.title);
+    result.targetReachableClaimed = challenge.source === "namu.wiki/random-walk" && result.verifiedClicks > 0;
     result.validClickAllowed = Boolean(validEvent.allowed);
     result.invalidClickBlocked = invalidEvent.allowed === false;
     result.backAllowed = Boolean(backEvent.allowed);
@@ -126,6 +130,8 @@ for (let index = 1; index <= runs; index += 1) {
       result.start !== result.target &&
       result.startLinks > 0 &&
       result.targetExists &&
+      result.targetLinks > 0 &&
+      result.targetReachableClaimed &&
       result.playerCreated &&
       result.runCreated &&
       result.validClickAllowed &&

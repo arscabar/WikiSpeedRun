@@ -215,7 +215,8 @@ a:focus-visible {
 
 .entryHero,
 .entryLockPanel,
-.entryRankPanel {
+.entryRankPanel,
+.shareLinkPanel {
   border: 1px solid var(--track-border);
   border-radius: var(--radius);
   background: var(--track-panel);
@@ -401,6 +402,7 @@ a:focus-visible {
 .leaderboardPanel,
 .entryLockPanel,
 .entryRankPanel,
+.shareLinkPanel,
 .browserZone,
 .finishPanel,
 .statusToast {
@@ -416,7 +418,8 @@ a:focus-visible {
 .routePanel,
 .leaderboardPanel,
 .entryLockPanel,
-.entryRankPanel {
+.entryRankPanel,
+.shareLinkPanel {
   padding: calc(var(--space) * 2);
 }
 
@@ -551,6 +554,37 @@ a:focus-visible {
 .routePlate strong {
   color: var(--track-amber);
   text-align: right;
+}
+
+.challengeHint,
+.mobileChallengeHint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid rgba(0, 164, 149, 0.36);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  background: #f0fbf8;
+}
+
+.challengeHint {
+  margin: calc(var(--space) * -1) 0 calc(var(--space) * 2);
+}
+
+.challengeHint span,
+.mobileChallengeHint span {
+  color: var(--track-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.challengeHint strong,
+.mobileChallengeHint strong {
+  color: var(--track-cyan);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
 }
 
 .primaryAction,
@@ -1086,6 +1120,36 @@ code {
   color: var(--track-cyan);
 }
 
+.finishTools {
+  display: grid;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.resultImagePicker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.resultImageStyle {
+  min-height: 40px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  background: #ffffff;
+  color: var(--track-paper-soft);
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resultImageStyle:hover,
+.resultImageStyle.active {
+  border-color: var(--track-amber);
+  background: var(--track-amber);
+  color: #ffffff;
+}
+
 .finishActions {
   display: grid;
   grid-template-columns: repeat(2, minmax(132px, 1fr));
@@ -1165,6 +1229,119 @@ code {
   background: #f8f9fa;
   color: var(--track-amber);
   font-weight: 700;
+}
+
+.shareLinkPanel {
+  display: grid;
+  gap: 10px;
+  border-top: 4px solid #cfd6dc;
+}
+
+.shareLinkPanel.online {
+  border-top-color: var(--track-border-strong);
+}
+
+.shareLinkStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  background: #f8f9fa;
+}
+
+.shareLinkStatus span,
+.shareLinkUpdated,
+.shareLinkError,
+.shareLinkUrl span,
+.shareLinkLocal span {
+  color: var(--track-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.shareLinkStatus strong {
+  color: var(--track-cyan);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.shareLinkUrl,
+.shareLinkLocal {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.shareLinkUrl code,
+.shareLinkLocal code {
+  display: block;
+  overflow: hidden;
+  min-height: 40px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: #f8f9fa;
+  color: var(--track-paper-soft);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shareLinkPanel.online .shareLinkUrl code {
+  border-color: rgba(0, 164, 149, 0.48);
+  background: #f0fbf8;
+  color: var(--track-cyan);
+}
+
+.shareLinkUpdated,
+.shareLinkError {
+  margin: 0;
+}
+
+.shareLinkError {
+  color: var(--track-danger);
+}
+
+.shareLinkActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  gap: 6px;
+}
+
+.shareLinkAction {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  background: #ffffff;
+  color: var(--track-paper-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.shareLinkAction.strong {
+  border-color: var(--track-amber);
+  color: var(--track-amber);
+}
+
+.shareLinkAction:hover {
+  border-color: var(--track-amber);
+  background: var(--track-amber);
+  color: #ffffff;
+}
+
+.shareLinkAction:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .playerRow {
@@ -1307,6 +1484,32 @@ code {
   margin-top: 14px;
 }
 
+.rankingSummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.rankingSummary span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  background: #f8f9fa;
+  color: var(--track-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.rankingSummary strong {
+  color: var(--track-cyan);
+  font-family: "JetBrains Mono", monospace;
+}
+
 .rankSession {
   margin-top: 8px;
   color: var(--track-muted);
@@ -1332,11 +1535,106 @@ code {
   color: #ffffff;
 }
 
+.rankingFilters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rankingFilter {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rankingFilter span {
+  color: var(--track-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.rankingFilter select {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  background: #ffffff;
+  color: var(--track-paper-soft);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.rankingFilter select:focus-visible {
+  outline: 3px solid rgba(0, 164, 149, 0.36);
+  outline-offset: 2px;
+}
+
+.rankingTools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rankingTool {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid var(--track-border);
+  border-radius: var(--radius);
+  background: #ffffff;
+  color: var(--track-paper-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.rankingTool:hover {
+  border-color: var(--track-amber);
+  color: var(--track-amber);
+}
+
+.rankingTool.danger {
+  color: var(--track-danger);
+}
+
+.rankingTool.danger:hover {
+  border-color: var(--track-danger);
+  background: #fff5f5;
+}
+
+.rankingTool:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.rankHeader,
 .rankRow {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 36px 68px minmax(72px, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr) 42px 66px 76px;
   gap: 8px;
   align-items: center;
+}
+
+.rankHeader {
+  min-height: 30px;
+  border-bottom: 1px solid var(--track-border);
+  color: var(--track-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.rankHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rankRow {
   min-height: 42px;
   border-bottom: 1px solid var(--track-border);
 }
@@ -1356,15 +1654,21 @@ code {
   white-space: nowrap;
 }
 
+.rankIdentity {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
 .rankRow code {
   color: var(--track-cyan);
   font-size: 0.82rem;
 }
 
-.rankRow em {
+.rankIdentity em {
   overflow: hidden;
   color: var(--track-amber);
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-style: normal;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -1595,8 +1899,13 @@ code {
   }
 
   .finishPanel,
+  .finishTools,
   .finishActions {
     grid-template-columns: 1fr;
+  }
+
+  .finishTools {
+    min-width: 0;
   }
 }
 
@@ -1607,6 +1916,7 @@ code {
   .historyPanel,
   .roomPanel,
   .routePanel,
+  .shareLinkPanel,
   .leaderboardPanel {
     padding: 12px;
   }
@@ -1619,7 +1929,16 @@ code {
   .entryRoutePreview,
   .entryTelemetry,
   .playerRow,
+  .shareLinkActions,
+  .rankingFilters,
+  .rankingTools,
+  .rankHeader,
   .rankRow {
+    grid-template-columns: 1fr;
+  }
+
+  .rankingSummary,
+  .resultImagePicker {
     grid-template-columns: 1fr;
   }
 

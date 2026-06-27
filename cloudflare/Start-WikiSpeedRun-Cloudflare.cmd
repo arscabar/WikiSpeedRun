@@ -32,12 +32,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo.
-echo [Cloudflare] Starting temporary public tunnel.
-echo [Cloudflare] Copy the trycloudflare.com URL shown below and share it.
-echo [Cloudflare] Close this window or press Ctrl+C to stop sharing.
-echo.
-cloudflared.exe tunnel --url http://127.0.0.1:3002
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Publish-WikiSpeedRun-Tunnel.ps1"
 
 echo.
 echo [Cloudflare] Tunnel stopped.

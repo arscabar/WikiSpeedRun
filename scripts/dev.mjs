@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { cleanupWikiSpeedRunProcesses } from "../server/process-cleanup.mjs";
+
+await cleanupWikiSpeedRunProcesses({ includeDevServer: true, includeTunnel: true, log: true });
 
 const commands = [
   {

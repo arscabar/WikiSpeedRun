@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupWikiSpeedRunProcesses } from "../server/process-cleanup.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(__dirname, "..");
@@ -14,6 +15,8 @@ async function createMainWindow() {
   process.env.WSR_PORT = String(port);
   process.env.WSR_DATA_DIR = app.getPath("userData");
   process.env.WSR_DIST_DIR = path.join(appRoot, "dist");
+
+  await cleanupWikiSpeedRunProcesses({ rootDir: appRoot, port, includeApp: true, includeTunnel: true, log: true });
 
   const { startServer } = await import("../server/index.mjs");
   localServer = await startServer({ host, port });

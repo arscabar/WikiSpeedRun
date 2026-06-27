@@ -6,8 +6,12 @@ import {
   ChevronUp,
   Clock3,
   Copy,
+  Download,
   Eye,
+  ExternalLink,
+  FileJson,
   GitBranch,
+  Globe2,
   Home,
   ImageDown,
   LoaderCircle,
@@ -22,6 +26,7 @@ import {
   ShieldCheck,
   Shuffle,
   Swords,
+  Trash2,
   Target,
   Trophy,
   UserRound,
@@ -70,9 +75,14 @@ type Challenge = {
   label: string;
   generatedAt: string;
   source: string;
+  verifiedClicks?: number;
 };
 
 type RankingMode = "clicks" | "time" | "score";
+type RankingModeFilter = "all" | Mode;
+type RankingRandomFilter = "all" | "standard" | "allRandom";
+type RankingPlayerFilter = "all" | "mine";
+type ResultImageStyle = "wiki" | "scoreboard" | "route";
 
 type RunMeta = {
   mode: Mode;
@@ -97,6 +107,8 @@ type CompletionRecord = {
   completedAt: string;
   path: string[];
   routeSteps?: RouteStep[];
+  runId?: string;
+  playerId?: string;
 };
 
 type RankingResponse = {
@@ -120,6 +132,15 @@ type PlayerProfile = {
 type PlayerResponse = {
   player: PlayerProfile;
   sessionStartedAt: string;
+};
+
+type ShareLinkResponse = {
+  sessionStartedAt: string;
+  localUrl: string;
+  externalUrl: string;
+  provider: string;
+  updatedAt: string;
+  status: "local-only" | "external-online";
 };
 
 type ServerRun = {
@@ -199,6 +220,29 @@ const rankingModeLabels: Record<RankingMode, string> = {
   clicks: "클릭 우선",
   time: "시간 우선",
   score: "점수 우선",
+};
+
+const rankingModeFilterLabels: Record<RankingModeFilter, string> = {
+  all: "전체 모드",
+  casual: "캐주얼",
+  practice: "연습",
+};
+
+const rankingRandomFilterLabels: Record<RankingRandomFilter, string> = {
+  all: "전체 랜덤",
+  standard: "일반",
+  allRandom: "아예랜덤",
+};
+
+const rankingPlayerFilterLabels: Record<RankingPlayerFilter, string> = {
+  all: "전체 플레이어",
+  mine: "내 기록",
+};
+
+const resultImageStyleLabels: Record<ResultImageStyle, string> = {
+  wiki: "위키 카드",
+  scoreboard: "랭킹 카드",
+  route: "경로 카드",
 };
 
 function formatDuration(totalMs: number) {
@@ -311,6 +355,81 @@ async function copyTextToClipboard(text: string) {
   return copied;
 }
 
+function readStoredOption<T extends string>(key: string, fallback: T, allowed: readonly T[]) {
+  const value = localStorage.getItem(key);
+  return value && allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+function downloadTextFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function escapeCsvCell(value: string | number | boolean) {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function makeRankingsCsv(records: CompletionRecord[]) {
+  const header = ["rank", "player", "mode", "random", "start", "target", "clicks", "time", "score", "completedAt", "route"];
+  const rows = records.map((record, index) => [
+    index + 1,
+    record.playerName,
+    modeLabels[record.mode],
+    record.allRandom ? randomRunLabels.allRandom : randomRunLabels.standard,
+    record.start,
+    record.target,
+    record.clicks,
+    formatDuration(record.elapsedMs),
+    record.score,
+    record.completedAt,
+    record.routeSteps
+      ? record.routeSteps.map((step, stepIndex) => formatNumberedRouteStep(step, stepIndex)).join(" -> ")
+      : record.path.join(" -> "),
+  ]);
+
+  return [header, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+}
+
+function truncateCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  if (context.measureText(text).width <= maxWidth) {
+    return text;
+  }
+
+  let output = text;
+  while (output.length > 1 && context.measureText(`${output}...`).width > maxWidth) {
+    output = output.slice(0, -1);
+  }
+  return `${output}...`;
+}
+
+function drawCanvasPill(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  label: string,
+  fill = "#ffffff",
+  stroke = "#d8dee3",
+  color = "#008275",
+) {
+  const width = Math.max(96, context.measureText(label).width + 28);
+  context.fillStyle = fill;
+  context.strokeStyle = stroke;
+  context.lineWidth = 2;
+  context.fillRect(x, y, width, 36);
+  context.strokeRect(x, y, width, 36);
+  context.fillStyle = color;
+  context.fillText(label, x + 14, y + 24);
+  return width;
+}
+
 function getChallengeOverrideParams() {
   const params = new URLSearchParams(window.location.search);
   const start = params.get("start")?.trim();
@@ -346,10 +465,26 @@ function App() {
   const [playerId, setPlayerId] = useState(() => localStorage.getItem("wsr.playerId") ?? "");
   const [playerName, setPlayerName] = useState(() => localStorage.getItem("wsr.playerName") ?? "PlayerA");
   const [rankingMode, setRankingMode] = useState<RankingMode>(
-    () => (localStorage.getItem("wsr.rankingMode") as RankingMode | null) ?? "clicks",
+    () => readStoredOption<RankingMode>("wsr.rankingMode", "clicks", ["clicks", "time", "score"]),
+  );
+  const [rankingModeFilter, setRankingModeFilter] = useState<RankingModeFilter>(
+    () => readStoredOption<RankingModeFilter>("wsr.rankingModeFilter", "all", ["all", "casual", "practice"]),
+  );
+  const [rankingRandomFilter, setRankingRandomFilter] = useState<RankingRandomFilter>(
+    () => readStoredOption<RankingRandomFilter>("wsr.rankingRandomFilter", "all", ["all", "standard", "allRandom"]),
+  );
+  const [rankingPlayerFilter, setRankingPlayerFilter] = useState<RankingPlayerFilter>(
+    () => readStoredOption<RankingPlayerFilter>("wsr.rankingPlayerFilter", "all", ["all", "mine"]),
+  );
+  const [resultImageStyle, setResultImageStyle] = useState<ResultImageStyle>(
+    () => readStoredOption<ResultImageStyle>("wsr.resultImageStyle", "wiki", ["wiki", "scoreboard", "route"]),
   );
   const [records, setRecords] = useState<CompletionRecord[]>([]);
+  const [lastCompletedRecord, setLastCompletedRecord] = useState<CompletionRecord | null>(null);
   const [rankingSessionStartedAt, setRankingSessionStartedAt] = useState("");
+  const [shareLink, setShareLink] = useState<ShareLinkResponse | null>(null);
+  const [shareLinkError, setShareLinkError] = useState("");
+  const [isRestoringRun, setIsRestoringRun] = useState(false);
   const [isEntered, setIsEntered] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [article, setArticle] = useState<ApiArticle | null>(null);
@@ -465,6 +600,16 @@ function App() {
     setRankingSessionStartedAt(payload.sessionStartedAt);
   }, []);
 
+  const fetchShareLink = useCallback(async () => {
+    try {
+      const payload = await readJson<ShareLinkResponse>("/api/share-link");
+      setShareLink(payload);
+      setShareLinkError("");
+    } catch (shareError) {
+      setShareLinkError(shareError instanceof Error ? shareError.message : "링크 상태 확인 실패");
+    }
+  }, []);
+
   const loadArticle = useCallback(async (title: string) => {
     return readJson<ApiArticle>(`/api/article?title=${encodeURIComponent(title)}`);
   }, []);
@@ -477,6 +622,12 @@ function App() {
 
     setStartedAt(Date.now() - run.elapsedMs);
     setElapsedMs(run.elapsedMs);
+
+    if (run.status === "running") {
+      localStorage.setItem("wsr.activeRunId", run.id);
+    } else {
+      localStorage.removeItem("wsr.activeRunId");
+    }
   }, []);
 
   const ensurePlayer = useCallback(
@@ -536,6 +687,7 @@ function App() {
         setRunMeta({ mode: nextMode, allRandom });
         setShareText("");
         setResultImageUrl("");
+        setLastCompletedRecord(null);
         setFindQuery("");
         setActiveFindIndex(-1);
         setShareState(allRandom ? "아예랜덤 설정됨" : "제시어 자동 설정됨");
@@ -551,6 +703,52 @@ function App() {
     [applyServerRun, createServerRun, loadArticle, playerName],
   );
 
+  const restoreActiveRun = useCallback(async () => {
+    const activeRunId = localStorage.getItem("wsr.activeRunId");
+
+    if (!activeRunId || isEntered) {
+      return;
+    }
+
+    setIsRestoringRun(true);
+    setShareState("진행 복구 중");
+
+    try {
+      const payload = await readJson<RunResponse>(`/api/runs/${encodeURIComponent(activeRunId)}`);
+      const restoredArticle = await loadArticle(payload.run.currentTitle);
+      const restoredChallenge: Challenge = {
+        start: payload.run.start,
+        target: payload.run.target,
+        label: payload.run.status === "finished" ? "복구된 완주 기록" : "복구된 제시어",
+        generatedAt: payload.run.startedAt,
+        source: "server-run-restore",
+        verifiedClicks: Math.max(0, payload.run.routeSteps.length - 1),
+      };
+
+      setPlayerId(payload.run.playerId);
+      setPlayerName(payload.run.playerName);
+      localStorage.setItem("wsr.playerId", payload.run.playerId);
+      localStorage.setItem("wsr.playerName", payload.run.playerName);
+      setMode(payload.run.mode);
+      setRunMeta({ mode: payload.run.mode, allRandom: payload.run.allRandom });
+      setChallenge(restoredChallenge);
+      setArticle(restoredArticle);
+      setLastCompletedRecord(payload.run.record);
+      setIsEntered(true);
+      setFindQuery("");
+      setActiveFindIndex(-1);
+      applyServerRun(payload.run);
+      setShareState(payload.run.status === "finished" ? "완주 기록 복구됨" : "진행 복구됨");
+      window.setTimeout(() => setShareState("대기"), 1600);
+    } catch {
+      localStorage.removeItem("wsr.activeRunId");
+      setShareState("복구할 진행 없음");
+      window.setTimeout(() => setShareState("대기"), 1600);
+    } finally {
+      setIsRestoringRun(false);
+    }
+  }, [applyServerRun, isEntered, loadArticle]);
+
   useEffect(() => {
     void fetchRankings();
 
@@ -560,6 +758,20 @@ function App() {
 
     return () => window.clearInterval(id);
   }, [fetchRankings]);
+
+  useEffect(() => {
+    void fetchShareLink();
+
+    const id = window.setInterval(() => {
+      void fetchShareLink();
+    }, 3000);
+
+    return () => window.clearInterval(id);
+  }, [fetchShareLink]);
+
+  useEffect(() => {
+    void restoreActiveRun();
+  }, [restoreActiveRun]);
 
   useEffect(() => {
     if (!isEntered || !challenge || isComplete || isLoading) {
@@ -657,18 +869,52 @@ function App() {
     [challenge?.target, clicks, currentTitle, history, isComplete, playerName],
   );
 
-  const sortedRecords = useMemo(() => sortRecords(records, rankingMode), [rankingMode, records]);
+  const filteredRecords = useMemo(
+    () =>
+      records.filter((record) => {
+        const modeMatches = rankingModeFilter === "all" || record.mode === rankingModeFilter;
+        const randomMatches =
+          rankingRandomFilter === "all" ||
+          (rankingRandomFilter === "allRandom" ? record.allRandom : !record.allRandom);
+        const playerMatches = rankingPlayerFilter === "all" || record.playerName === playerName;
+
+        return modeMatches && randomMatches && playerMatches;
+      }),
+    [playerName, rankingModeFilter, rankingPlayerFilter, rankingRandomFilter, records],
+  );
+  const allSortedRecords = useMemo(() => sortRecords(records, rankingMode), [rankingMode, records]);
+  const sortedRecords = useMemo(() => sortRecords(filteredRecords, rankingMode), [filteredRecords, rankingMode]);
   const leaderboard = useMemo(
     () =>
-      sortedRecords.slice(0, 6).map((record, index) => ({
+      sortedRecords.slice(0, 8).map((record, index) => ({
         rank: index + 1,
         name: record.playerName,
         clicks: record.clicks,
         time: formatDuration(record.elapsedMs),
         score: record.score,
+        modeLabel: modeLabels[record.mode],
+        randomLabel: record.allRandom ? randomRunLabels.allRandom : randomRunLabels.standard,
+        route: `${record.start} → ${record.target}`,
       })),
     [sortedRecords],
   );
+  const rankingSummary = useMemo(
+    () => ({
+      total: records.length,
+      visible: filteredRecords.length,
+      casual: records.filter((record) => record.mode === "casual").length,
+      allRandom: records.filter((record) => record.allRandom).length,
+    }),
+    [filteredRecords.length, records],
+  );
+  const currentRecordRank = useMemo(() => {
+    if (!lastCompletedRecord) {
+      return 0;
+    }
+
+    return allSortedRecords.findIndex((record) => record.id === lastCompletedRecord.id) + 1;
+  }, [allSortedRecords, lastCompletedRecord]);
+  const resultRecordStatus = isPractice ? "연습 기록 제외" : currentRecordRank > 0 ? `세션 ${currentRecordRank}위` : "세션 기록";
   const bestScore = records.length > 0 ? Math.max(...records.map((record) => record.score)) : 0;
   const bestTime = records.length > 0 ? Math.min(...records.map((record) => record.elapsedMs)) : 0;
 
@@ -703,6 +949,69 @@ function App() {
     localStorage.setItem("wsr.rankingMode", nextMode);
   };
 
+  const changeRankingModeFilter = (nextFilter: RankingModeFilter) => {
+    setRankingModeFilter(nextFilter);
+    localStorage.setItem("wsr.rankingModeFilter", nextFilter);
+  };
+
+  const changeRankingRandomFilter = (nextFilter: RankingRandomFilter) => {
+    setRankingRandomFilter(nextFilter);
+    localStorage.setItem("wsr.rankingRandomFilter", nextFilter);
+  };
+
+  const changeRankingPlayerFilter = (nextFilter: RankingPlayerFilter) => {
+    setRankingPlayerFilter(nextFilter);
+    localStorage.setItem("wsr.rankingPlayerFilter", nextFilter);
+  };
+
+  const changeResultImageStyle = (nextStyle: ResultImageStyle) => {
+    setResultImageStyle(nextStyle);
+    localStorage.setItem("wsr.resultImageStyle", nextStyle);
+  };
+
+  const exportRankingsJson = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      filters: {
+        sort: rankingMode,
+        mode: rankingModeFilter,
+        random: rankingRandomFilter,
+        player: rankingPlayerFilter,
+      },
+      sessionStartedAt: rankingSessionStartedAt,
+      records: sortedRecords,
+    };
+
+    downloadTextFile(JSON.stringify(payload, null, 2), `wiki-speed-run-rankings-${Date.now()}.json`, "application/json;charset=utf-8");
+    setShareState("랭킹 JSON 저장됨");
+    window.setTimeout(() => setShareState("대기"), 1400);
+  };
+
+  const exportRankingsCsv = () => {
+    downloadTextFile(makeRankingsCsv(sortedRecords), `wiki-speed-run-rankings-${Date.now()}.csv`, "text/csv;charset=utf-8");
+    setShareState("랭킹 CSV 저장됨");
+    window.setTimeout(() => setShareState("대기"), 1400);
+  };
+
+  const resetRankings = async () => {
+    const accepted = window.confirm("현재 서버 세션 랭킹을 초기화할까요?");
+
+    if (!accepted) {
+      return;
+    }
+
+    try {
+      const payload = await readJson<RankingResponse>("/api/rankings", { method: "DELETE" });
+      setRecords(payload.records);
+      setRankingSessionStartedAt(payload.sessionStartedAt);
+      setShareState("세션 랭킹 초기화");
+      window.setTimeout(() => setShareState("대기"), 1400);
+    } catch (resetError) {
+      setShareState(resetError instanceof Error ? resetError.message : "초기화 실패");
+      window.setTimeout(() => setShareState("대기"), 1800);
+    }
+  };
+
   const exitToMain = useCallback(() => {
     setIsEntered(false);
     setChallenge(null);
@@ -715,10 +1024,12 @@ function App() {
     setError("");
     setShareText("");
     setResultImageUrl("");
+    setLastCompletedRecord(null);
     setFindOpen(false);
     setFindQuery("");
     setActiveFindIndex(-1);
     setShareState("대기");
+    localStorage.removeItem("wsr.activeRunId");
     window.history.replaceState({ view: "entry" }, "", window.location.href);
   }, []);
 
@@ -737,6 +1048,7 @@ function App() {
       applyServerRun(nextRun);
       setShareText("");
       setResultImageUrl("");
+      setLastCompletedRecord(null);
       setFindQuery("");
       setActiveFindIndex(-1);
       setShareState("현재 판 재시작");
@@ -774,6 +1086,7 @@ function App() {
       applyServerRun(response.run);
       setShareText("");
       setResultImageUrl("");
+      setLastCompletedRecord(null);
       setFindQuery("");
       setActiveFindIndex(-1);
       setShareState("이전 문서");
@@ -820,6 +1133,7 @@ function App() {
           setRecords(event.ranking.records);
           setRankingSessionStartedAt(event.ranking.sessionStartedAt);
         }
+        setLastCompletedRecord(event.ranking?.record ?? event.run.record);
 
         if (event.ranking?.reason === "practice_mode" || runMeta.mode === "practice") {
           setShareState("연습 완주");
@@ -870,6 +1184,22 @@ function App() {
     window.setTimeout(() => setShareState("대기"), 1400);
   };
 
+  const copyAccessLink = async (kind: "external" | "local") => {
+    const url = kind === "external" ? shareLink?.externalUrl : shareLink?.localUrl;
+    const label = kind === "external" ? "외부 링크" : "로컬 링크";
+
+    if (!url) {
+      setShareState(kind === "external" ? "외부 링크 대기" : "로컬 링크 없음");
+      window.setTimeout(() => setShareState("대기"), 1400);
+      return;
+    }
+
+    const message = [`나무위키 스피드런 ${label}`, url, `세션 코드: ${roomCode}`].join("\n");
+    const copied = await copyTextToClipboard(message);
+    setShareState(copied ? `${label} 복사됨` : `${label} 준비됨`);
+    window.setTimeout(() => setShareState("대기"), 1400);
+  };
+
   const copyResult = async () => {
     if (!challenge) {
       return;
@@ -908,88 +1238,193 @@ function App() {
       return;
     }
 
-    context.fillStyle = "#f5f6f7";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = "#00a495";
-    context.lineWidth = 6;
-    context.strokeRect(42, 42, canvas.width - 84, canvas.height - 84);
-
-    context.fillStyle = "#00a495";
-    context.font = "700 42px Noto Sans KR, sans-serif";
-    context.fillText("나무위키 스피드런", 76, 116);
-
-    context.fillStyle = "#202122";
-    context.font = "700 52px Noto Sans KR, sans-serif";
-    context.fillText(`${challenge.start} -> ${challenge.target}`.slice(0, 36), 76, 208);
-
-    context.fillStyle = "#54595d";
-    context.font = "500 32px Noto Sans KR, sans-serif";
-    context.fillText(`Time ${formatDuration(elapsedMs)}   ${clicks} clicks`, 76, 266);
-    context.fillStyle = "#00a495";
-    context.font = "700 32px Noto Sans KR, sans-serif";
-    context.fillText(`${resultScore} points`, 76, 316);
-    context.fillStyle = "#54595d";
-    context.font = "600 28px Noto Sans KR, sans-serif";
-    context.fillText(`모드 ${runModeLabel} · 랜덤 여부 ${runRandomLabel}`, 76, 366);
-
     const graphSteps = routeSteps.length > 0 ? routeSteps : createRouteStepsFromTitles(history);
-    const maxImageRows = 8;
-    const imageSteps =
-      graphSteps.length > maxImageRows
-        ? [...graphSteps.slice(0, maxImageRows - 1), graphSteps[graphSteps.length - 1]]
-        : graphSteps;
-    const skippedSteps = graphSteps.length - imageSteps.length;
-    const graphLeft = 700;
-    const badgeWidth = 50;
-    const rowGap = 52;
-    const firstY = 160;
+    const safePlayerName = playerName.trim() || "PlayerA";
+    const generatedAt = new Date().toLocaleString("ko-KR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const titleText = `${challenge.start} -> ${challenge.target}`;
+    const metaText = `모드 ${runModeLabel} · 랜덤 여부 ${runRandomLabel} · ${resultRecordStatus}`;
 
-    context.fillStyle = "#202122";
-    context.font = "700 30px Noto Sans KR, sans-serif";
-    context.fillText("이동 로그", graphLeft, 116);
+    const drawHeader = (accent = "#00a495", dark = false) => {
+      context.fillStyle = dark ? "#ffffff" : accent;
+      context.font = "800 38px Noto Sans KR, sans-serif";
+      context.fillText("나무위키 스피드런", 76, 112);
+      context.font = "600 22px Noto Sans KR, sans-serif";
+      context.fillStyle = dark ? "rgba(255,255,255,0.78)" : "#54595d";
+      context.fillText(generatedAt, 76, 146);
+    };
 
-    imageSteps.forEach((step, displayIndex) => {
-      const originalIndex = skippedSteps > 0 && displayIndex === imageSteps.length - 1 ? graphSteps.length - 1 : displayIndex;
-      const y = firstY + displayIndex * rowGap;
-      const previousY = firstY + (displayIndex - 1) * rowGap;
-      const isTarget = step.title === challenge.target;
-      const isBack = step.action === "back";
+    const drawMetric = (x: number, y: number, label: string, value: string, accent = "#00a495") => {
+      context.fillStyle = "#54595d";
+      context.font = "700 20px Noto Sans KR, sans-serif";
+      context.fillText(label, x, y);
+      context.fillStyle = accent;
+      context.font = "800 34px JetBrains Mono, monospace";
+      context.fillText(value, x, y + 42);
+    };
 
-      if (displayIndex > 0) {
-        context.strokeStyle = isBack ? "#899197" : "#00a495";
-        context.lineWidth = isBack ? 3 : 4;
-        context.setLineDash(isBack ? [8, 8] : []);
-        context.beginPath();
-        context.moveTo(graphLeft + badgeWidth / 2, previousY + 18);
-        context.lineTo(graphLeft + badgeWidth / 2, y - 18);
-        context.stroke();
-        context.setLineDash([]);
-      }
+    const drawRouteLog = (x: number, y: number, maxRows = 7, rowGap = 52, textWidth = 330) => {
+      const imageSteps =
+        graphSteps.length > maxRows ? [...graphSteps.slice(0, maxRows - 1), graphSteps[graphSteps.length - 1]] : graphSteps;
+      const skippedSteps = graphSteps.length - imageSteps.length;
+      const badgeWidth = 50;
 
-      if (skippedSteps > 0 && displayIndex === imageSteps.length - 1) {
-        context.fillStyle = "#6b7278";
-        context.font = "700 18px Noto Sans KR, sans-serif";
-        context.fillText(`+${skippedSteps}단계`, graphLeft + 66, y - 32);
-      }
+      imageSteps.forEach((step, displayIndex) => {
+        const originalIndex = skippedSteps > 0 && displayIndex === imageSteps.length - 1 ? graphSteps.length - 1 : displayIndex;
+        const rowY = y + displayIndex * rowGap;
+        const previousY = y + (displayIndex - 1) * rowGap;
+        const isTarget = step.title === challenge.target;
+        const isBack = step.action === "back";
 
-      context.fillStyle = isTarget ? "#00a495" : isBack ? "#f1f3f5" : "#ffffff";
-      context.strokeStyle = isTarget ? "#008275" : isBack ? "#899197" : "#9aa4aa";
-      context.lineWidth = 3;
-      context.fillRect(graphLeft, y - 18, badgeWidth, 36);
-      context.strokeRect(graphLeft, y - 18, badgeWidth, 36);
+        if (displayIndex > 0) {
+          context.strokeStyle = isBack ? "#899197" : "#00a495";
+          context.lineWidth = isBack ? 3 : 4;
+          context.setLineDash(isBack ? [8, 8] : []);
+          context.beginPath();
+          context.moveTo(x + badgeWidth / 2, previousY + 18);
+          context.lineTo(x + badgeWidth / 2, rowY - 18);
+          context.stroke();
+          context.setLineDash([]);
+        }
 
-      context.fillStyle = isTarget ? "#ffffff" : "#202122";
-      context.font = "700 18px JetBrains Mono, monospace";
-      context.fillText(String(originalIndex + 1).padStart(2, "0"), graphLeft + 11, y + 7);
+        if (skippedSteps > 0 && displayIndex === imageSteps.length - 1) {
+          context.fillStyle = "#6b7278";
+          context.font = "700 18px Noto Sans KR, sans-serif";
+          context.fillText(`+${skippedSteps}단계`, x + 66, rowY - 32);
+        }
 
-      context.fillStyle = isBack ? "#6b7278" : "#008275";
-      context.font = "700 18px Noto Sans KR, sans-serif";
-      context.fillText(routeActionLabels[step.action], graphLeft + 66, y - 2);
+        context.fillStyle = isTarget ? "#00a495" : isBack ? "#f1f3f5" : "#ffffff";
+        context.strokeStyle = isTarget ? "#008275" : isBack ? "#899197" : "#9aa4aa";
+        context.lineWidth = 3;
+        context.fillRect(x, rowY - 18, badgeWidth, 36);
+        context.strokeRect(x, rowY - 18, badgeWidth, 36);
+
+        context.fillStyle = isTarget ? "#ffffff" : "#202122";
+        context.font = "800 18px JetBrains Mono, monospace";
+        context.fillText(String(originalIndex + 1).padStart(2, "0"), x + 11, rowY + 7);
+
+        context.fillStyle = isBack ? "#6b7278" : "#008275";
+        context.font = "800 18px Noto Sans KR, sans-serif";
+        context.fillText(routeActionLabels[step.action], x + 66, rowY - 2);
+
+        context.fillStyle = "#202122";
+        context.font = "700 22px Noto Sans KR, sans-serif";
+        context.fillText(truncateCanvasText(context, step.title, textWidth), x + 124, rowY + 8);
+      });
+    };
+
+    if (resultImageStyle === "scoreboard") {
+      context.fillStyle = "#f5f6f7";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#00a495";
+      context.fillRect(0, 0, canvas.width, 164);
+      drawHeader("#ffffff", true);
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(54, 210, 492, 270);
+      context.strokeStyle = "#d8dee3";
+      context.lineWidth = 2;
+      context.strokeRect(54, 210, 492, 270);
 
       context.fillStyle = "#202122";
-      context.font = "600 22px Noto Sans KR, sans-serif";
-      context.fillText(step.title.slice(0, 15), graphLeft + 124, y + 8);
-    });
+      context.font = "800 48px Noto Sans KR, sans-serif";
+      context.fillText(truncateCanvasText(context, titleText, 410), 86, 274);
+      context.font = "700 24px Noto Sans KR, sans-serif";
+      context.fillStyle = "#54595d";
+      context.fillText(truncateCanvasText(context, metaText, 420), 86, 318);
+
+      drawMetric(88, 382, "TIME", formatDuration(elapsedMs), "#008275");
+      drawMetric(276, 382, "CLICKS", String(clicks), "#008275");
+      drawMetric(420, 382, "SCORE", String(resultScore), "#00a495");
+
+      context.fillStyle = "#202122";
+      context.font = "800 30px Noto Sans KR, sans-serif";
+      context.fillText("세션 랭킹", 620, 232);
+      context.font = "700 20px Noto Sans KR, sans-serif";
+      context.fillStyle = "#6b7278";
+      context.fillText(`플레이어 ${safePlayerName}`, 620, 264);
+
+      const rankingRows = leaderboard.slice(0, 5);
+      rankingRows.forEach((row, index) => {
+        const rowY = 310 + index * 54;
+        const isSelf = row.name === safePlayerName && row.score === resultScore;
+        context.fillStyle = isSelf ? "#f0fbf8" : "#ffffff";
+        context.strokeStyle = isSelf ? "#00a495" : "#d8dee3";
+        context.lineWidth = 2;
+        context.fillRect(620, rowY - 32, 500, 44);
+        context.strokeRect(620, rowY - 32, 500, 44);
+
+        context.fillStyle = isSelf ? "#00a495" : "#899197";
+        context.font = "800 20px JetBrains Mono, monospace";
+        context.fillText(String(row.rank).padStart(2, "0"), 640, rowY - 3);
+        context.fillStyle = "#202122";
+        context.font = "800 20px Noto Sans KR, sans-serif";
+        context.fillText(truncateCanvasText(context, row.name, 160), 692, rowY - 4);
+        context.fillStyle = "#54595d";
+        context.font = "700 17px Noto Sans KR, sans-serif";
+        context.fillText(`${row.clicks}클릭 · ${row.time}`, 866, rowY - 4);
+        context.fillStyle = "#008275";
+        context.font = "800 18px JetBrains Mono, monospace";
+        context.fillText(String(row.score), 1010, rowY - 4);
+      });
+    } else if (resultImageStyle === "route") {
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#f0fbf8";
+      context.fillRect(0, 0, 420, canvas.height);
+      context.strokeStyle = "#00a495";
+      context.lineWidth = 6;
+      context.strokeRect(42, 42, canvas.width - 84, canvas.height - 84);
+
+      drawHeader();
+      context.fillStyle = "#202122";
+      context.font = "800 50px Noto Sans KR, sans-serif";
+      context.fillText(truncateCanvasText(context, titleText, 320), 76, 232);
+      context.font = "700 24px Noto Sans KR, sans-serif";
+      context.fillStyle = "#54595d";
+      context.fillText(truncateCanvasText(context, metaText, 300), 78, 278);
+      context.font = "800 26px JetBrains Mono, monospace";
+      context.fillStyle = "#008275";
+      context.fillText(`${formatDuration(elapsedMs)} / ${clicks} clicks / ${resultScore}`, 78, 336);
+
+      context.font = "800 28px Noto Sans KR, sans-serif";
+      context.fillStyle = "#202122";
+      context.fillText("탑다운 이동 그래프", 486, 110);
+      drawRouteLog(486, 168, 8, 50, 430);
+    } else {
+      context.fillStyle = "#f5f6f7";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = "#00a495";
+      context.lineWidth = 6;
+      context.strokeRect(42, 42, canvas.width - 84, canvas.height - 84);
+
+      drawHeader();
+      context.fillStyle = "#202122";
+      context.font = "800 52px Noto Sans KR, sans-serif";
+      context.fillText(truncateCanvasText(context, titleText, 570), 76, 214);
+      context.font = "700 24px Noto Sans KR, sans-serif";
+      context.fillStyle = "#54595d";
+      context.fillText(truncateCanvasText(context, metaText, 560), 76, 258);
+
+      context.font = "800 20px Noto Sans KR, sans-serif";
+      drawCanvasPill(context, 76, 304, `플레이어 ${safePlayerName}`);
+      drawCanvasPill(context, 248, 304, `모드 ${runModeLabel}`);
+      drawCanvasPill(context, 382, 304, `랜덤 ${runRandomLabel}`);
+
+      drawMetric(76, 406, "TIME", formatDuration(elapsedMs), "#008275");
+      drawMetric(268, 406, "CLICKS", String(clicks), "#008275");
+      drawMetric(420, 406, "SCORE", String(resultScore), "#00a495");
+
+      context.fillStyle = "#202122";
+      context.font = "800 30px Noto Sans KR, sans-serif";
+      context.fillText("이동 로그", 700, 116);
+      drawRouteLog(700, 160, 8, 52, 254);
+    }
 
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     const imageUrl = blob ? URL.createObjectURL(blob) : canvas.toDataURL("image/png");
@@ -1041,7 +1476,7 @@ function App() {
 
         <div className="liveBadge" aria-live="polite">
           <Radio aria-hidden="true" size={18} />
-          <span>{isComplete ? "완주" : isEntered ? "진행 중" : "준비"}</span>
+          <span>{isRestoringRun ? "복구 중" : isComplete ? "완주" : isEntered ? "진행 중" : "준비"}</span>
         </div>
       </header>
 
@@ -1144,6 +1579,14 @@ function App() {
                 )}
               </div>
             </section>
+
+            <ShareLinkPanel
+              shareLink={shareLink}
+              error={shareLinkError}
+              onRefresh={() => void fetchShareLink()}
+              onCopyExternal={() => void copyAccessLink("external")}
+              onCopyLocal={() => void copyAccessLink("local")}
+            />
           </aside>
         </main>
       ) : (
@@ -1156,6 +1599,10 @@ function App() {
                 <span>{challenge?.start ?? "-"}</span>
                 <GitBranch aria-hidden="true" size={18} />
                 <strong>{challenge?.target ?? "-"}</strong>
+              </div>
+              <div className="challengeHint">
+                <span>도달 검증</span>
+                <strong>{challenge?.verifiedClicks ? `${challenge.verifiedClicks}클릭 경로 존재` : "수동 제시어"}</strong>
               </div>
               <button className="primaryAction" type="button" disabled={isLoading} onClick={() => startChallenge(mode)}>
                 <Shuffle aria-hidden="true" size={18} />
@@ -1231,6 +1678,10 @@ function App() {
               <span>{challenge?.start ?? "-"}</span>
               <GitBranch aria-hidden="true" size={17} />
               <strong>{challenge?.target ?? "-"}</strong>
+            </div>
+            <div className="mobileChallengeHint">
+              <span>도달 검증</span>
+              <strong>{challenge?.verifiedClicks ? `${challenge.verifiedClicks}클릭 경로 존재` : "수동 제시어"}</strong>
             </div>
             <div className="mobileStats">
               <div>
@@ -1332,7 +1783,7 @@ function App() {
                   <h2>{formatDuration(elapsedMs)}</h2>
                   <div className="scoreResult">
                     <strong>{resultScore}</strong>
-                    {isPractice && <span>연습 기록 제외</span>}
+                    <span>{resultRecordStatus}</span>
                   </div>
                   <div className="resultMeta" aria-label="결과 설정">
                     <span>
@@ -1346,15 +1797,30 @@ function App() {
                     {clicks}회 클릭 · {routeTimeline}
                   </p>
                 </div>
-                <div className="finishActions">
-                  <button className="secondaryAction" type="button" onClick={copyResult}>
-                    <Share2 aria-hidden="true" size={18} />
-                    <span>공유 문구</span>
-                  </button>
-                  <button className="secondaryAction" type="button" onClick={downloadResultImage}>
-                    <ImageDown aria-hidden="true" size={18} />
-                    <span>결과 저장</span>
-                  </button>
+                <div className="finishTools">
+                  <div className="resultImagePicker" aria-label="결과 이미지 스타일">
+                    {(["wiki", "scoreboard", "route"] as ResultImageStyle[]).map((style) => (
+                      <button
+                        className={resultImageStyle === style ? "resultImageStyle active" : "resultImageStyle"}
+                        type="button"
+                        aria-pressed={resultImageStyle === style}
+                        onClick={() => changeResultImageStyle(style)}
+                        key={style}
+                      >
+                        {resultImageStyleLabels[style]}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="finishActions">
+                    <button className="secondaryAction" type="button" onClick={copyResult}>
+                      <Share2 aria-hidden="true" size={18} />
+                      <span>공유 문구</span>
+                    </button>
+                    <button className="secondaryAction" type="button" onClick={downloadResultImage}>
+                      <ImageDown aria-hidden="true" size={18} />
+                      <span>결과 저장</span>
+                    </button>
+                  </div>
                 </div>
                 {(shareText || resultImageUrl) && (
                   <div className="shareOutput">
@@ -1467,6 +1933,14 @@ function App() {
               </div>
             </section>
 
+            <ShareLinkPanel
+              shareLink={shareLink}
+              error={shareLinkError}
+              onRefresh={() => void fetchShareLink()}
+              onCopyExternal={() => void copyAccessLink("external")}
+              onCopyLocal={() => void copyAccessLink("local")}
+            />
+
             <section className="routePanel">
               <div className="panelHeader">
                 <Trophy aria-hidden="true" size={18} />
@@ -1481,6 +1955,20 @@ function App() {
                 <h2>세션 랭킹</h2>
               </div>
               <div className="rankSession">서버 시작 {rankingSessionStartedAt ? formatDate(rankingSessionStartedAt) : "-"}</div>
+              <div className="rankingSummary" aria-label="랭킹 요약">
+                <span>
+                  표시 <strong>{rankingSummary.visible}</strong>
+                </span>
+                <span>
+                  전체 <strong>{rankingSummary.total}</strong>
+                </span>
+                <span>
+                  캐주얼 <strong>{rankingSummary.casual}</strong>
+                </span>
+                <span>
+                  아예랜덤 <strong>{rankingSummary.allRandom}</strong>
+                </span>
+              </div>
               <div className="rankingModes" aria-label="랭킹 정렬 기준">
                 {(["clicks", "time", "score"] as RankingMode[]).map((item) => (
                   <button
@@ -1494,16 +1982,89 @@ function App() {
                   </button>
                 ))}
               </div>
+              <div className="rankingFilters" aria-label="랭킹 필터">
+                <label className="rankingFilter">
+                  <span>모드</span>
+                  <select value={rankingModeFilter} onChange={(event) => changeRankingModeFilter(event.target.value as RankingModeFilter)}>
+                    {(["all", "casual", "practice"] as RankingModeFilter[]).map((item) => (
+                      <option value={item} key={item}>
+                        {rankingModeFilterLabels[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="rankingFilter">
+                  <span>랜덤</span>
+                  <select
+                    value={rankingRandomFilter}
+                    onChange={(event) => changeRankingRandomFilter(event.target.value as RankingRandomFilter)}
+                  >
+                    {(["all", "standard", "allRandom"] as RankingRandomFilter[]).map((item) => (
+                      <option value={item} key={item}>
+                        {rankingRandomFilterLabels[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="rankingFilter">
+                  <span>플레이어</span>
+                  <select
+                    value={rankingPlayerFilter}
+                    onChange={(event) => changeRankingPlayerFilter(event.target.value as RankingPlayerFilter)}
+                  >
+                    {(["all", "mine"] as RankingPlayerFilter[]).map((item) => (
+                      <option value={item} key={item}>
+                        {rankingPlayerFilterLabels[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="rankingTools" aria-label="랭킹 도구">
+                <button className="rankingTool" type="button" disabled={sortedRecords.length === 0} onClick={exportRankingsJson}>
+                  <FileJson aria-hidden="true" size={16} />
+                  <span>JSON</span>
+                </button>
+                <button className="rankingTool" type="button" disabled={sortedRecords.length === 0} onClick={exportRankingsCsv}>
+                  <Download aria-hidden="true" size={16} />
+                  <span>CSV</span>
+                </button>
+                <button className="rankingTool danger" type="button" disabled={records.length === 0} onClick={() => void resetRankings()}>
+                  <Trash2 aria-hidden="true" size={16} />
+                  <span>초기화</span>
+                </button>
+              </div>
               <div className="rankTable" role="table" aria-label="세션 랭킹">
                 {leaderboard.length > 0 ? (
-                  leaderboard.map((row) => (
-                    <div className="rankRow" role="row" key={`${row.name}-${row.rank}-${row.score}`}>
-                      <span role="cell">{row.rank}</span>
-                      <strong role="cell">{row.name}</strong>
-                      <span role="cell">{row.clicks}</span>
-                      <code role="cell">{row.score}</code>
+                  <>
+                    <div className="rankHeader" role="row">
+                      <span role="columnheader">#</span>
+                      <span role="columnheader">플레이어</span>
+                      <span role="columnheader">클릭</span>
+                      <span role="columnheader">시간</span>
+                      <span role="columnheader">점수</span>
                     </div>
-                  ))
+                    {leaderboard.map((row) => (
+                      <div
+                        className={row.name === playerName ? "rankRow self" : "rankRow"}
+                        role="row"
+                        key={`${row.name}-${row.rank}-${row.route}-${row.score}`}
+                      >
+                        <span className="rankIndex" role="cell">
+                          {row.rank}
+                        </span>
+                        <div className="rankIdentity" role="cell">
+                          <strong>{row.name}</strong>
+                          <em>
+                            {row.modeLabel} · {row.randomLabel}
+                          </em>
+                        </div>
+                        <span role="cell">{row.clicks}</span>
+                        <code role="cell">{row.time}</code>
+                        <code role="cell">{row.score}</code>
+                      </div>
+                    ))}
+                  </>
                 ) : (
                   <div className="emptyRank">완주 기록 없음</div>
                 )}
@@ -1518,6 +2079,60 @@ function App() {
         </main>
       )}
     </div>
+  );
+}
+
+type ShareLinkPanelProps = {
+  shareLink: ShareLinkResponse | null;
+  error: string;
+  onRefresh: () => void;
+  onCopyExternal: () => void;
+  onCopyLocal: () => void;
+};
+
+function ShareLinkPanel({ shareLink, error, onRefresh, onCopyExternal, onCopyLocal }: ShareLinkPanelProps) {
+  const externalUrl = shareLink?.externalUrl ?? "";
+  const localUrl = shareLink?.localUrl ?? "";
+  const hasExternalUrl = Boolean(externalUrl);
+  const updatedAt = shareLink?.updatedAt ? formatDate(shareLink.updatedAt) : "";
+
+  return (
+    <section className={hasExternalUrl ? "shareLinkPanel online" : "shareLinkPanel"} aria-label="외부 접속 링크">
+      <div className="panelHeader">
+        <Globe2 aria-hidden="true" size={18} />
+        <h2>외부 접속</h2>
+      </div>
+      <div className="shareLinkStatus">
+        <span>{shareLink?.provider ? shareLink.provider.toUpperCase() : "LOCAL"}</span>
+        <strong>{hasExternalUrl ? "ONLINE" : "대기"}</strong>
+      </div>
+      <div className="shareLinkUrl" aria-label="외부 접속 주소">
+        <span>외부</span>
+        <code>{hasExternalUrl ? externalUrl : "Cloudflare 터널을 시작하면 자동 표시"}</code>
+      </div>
+      {localUrl && (
+        <div className="shareLinkLocal" aria-label="로컬 접속 주소">
+          <span>로컬</span>
+          <code>{localUrl}</code>
+        </div>
+      )}
+      {updatedAt && <p className="shareLinkUpdated">갱신 {updatedAt}</p>}
+      {error && <p className="shareLinkError">{error}</p>}
+      <div className="shareLinkActions">
+        <button className="shareLinkAction strong" type="button" disabled={!hasExternalUrl} onClick={onCopyExternal}>
+          <ExternalLink aria-hidden="true" size={16} />
+          <span>외부 링크</span>
+        </button>
+        <button className="shareLinkAction" type="button" disabled={!localUrl} onClick={onCopyLocal}>
+          <Copy aria-hidden="true" size={16} />
+          <span>로컬</span>
+        </button>
+        <button className="shareLinkAction" type="button" onClick={onRefresh}>
+          <RotateCcw aria-hidden="true" size={16} />
+          <span>갱신</span>
+        </button>
+      </div>
+    </section>
   );
 }
 

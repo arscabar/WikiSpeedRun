@@ -21,6 +21,7 @@ await fs.mkdir(bundleDir, { recursive: true });
 await fs.copyFile(portableExe, path.join(bundleDir, path.basename(portableExe)));
 await fs.copyFile(cloudflaredSource, path.join(bundleDir, "cloudflared.exe"));
 await fs.copyFile(path.join(rootDir, "cloudflare", "Start-WikiSpeedRun-Cloudflare.cmd"), path.join(bundleDir, "Start-WikiSpeedRun-Cloudflare.cmd"));
+await fs.copyFile(path.join(rootDir, "cloudflare", "Publish-WikiSpeedRun-Tunnel.ps1"), path.join(bundleDir, "Publish-WikiSpeedRun-Tunnel.ps1"));
 await fs.copyFile(path.join(rootDir, "cloudflare", "README-cloudflare.txt"), path.join(bundleDir, "README-cloudflare.txt"));
 
 execFileSync(

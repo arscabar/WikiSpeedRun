@@ -9,7 +9,7 @@ Wiki Speed Run gives players a locked, fair browsing environment for Namuwiki sp
 - React/Vite client with a locked browser shell.
 - Local Node backend that fetches and sanitizes real Namuwiki pages.
 - Daily, infinite, and private-room UI states.
-- Automatic challenge creation: target document is selected automatically, then a different start document is selected randomly.
+- Automatic challenge creation: a playable start document is selected, then the server follows real body links by random walk and uses only the reached document as the target.
 - Timer, click count, route history, result graph, room code copy, and result image download.
 
 ## Platform Decision
@@ -46,12 +46,15 @@ Use a WebView/Electron wrapper for window control, fullscreen/kiosk mode, shortc
 - Node API for records, challenges, rooms, and replay metadata.
 - WebSocket gateway for local/LAN room state: current document, click count, finish event, spectators, and room lifecycle.
 - Namuwiki fetch/proxy service that strips search, sidebars, backlinks, scripts, editable controls, and non-body links before returning structured content.
-- Challenge generator that calls Namuwiki random/document endpoints, keeps only existing normal `/w/` document pages, chooses one target automatically, then chooses one different random start page.
-- Challenge generation does not calculate difficulty, reachability, or shortest path.
+- Challenge generator that calls Namuwiki random/document endpoints, keeps only existing normal `/w/` document pages, then verifies reachability by following sanitized body links.
+- Challenge generation does not calculate difficulty or shortest path. It only guarantees that at least one server-verified click path exists and exposes the verified click count, not the hidden route.
 
 Implemented MVP endpoints:
 
-- `GET /api/challenge?mode=daily`
+- `GET /api/challenge?mode=casual`
+- `GET /api/challenge?mode=practice`
+- `GET /api/challenge?mode=wild`
+- `GET /api/share-link`
 - `GET /api/article?title=사과`
 - `POST /api/run/event` with `{ "from": "사과", "to": "사과나무" }`
 
@@ -93,7 +96,7 @@ Local ranking supports three sort settings:
 - elapsed time first
 - score first
 
-Completed records are currently stored in `localStorage` under `wsr.records`.
+Completed records are stored in the running server process memory. The session ranking starts empty when the server starts and is shared by local and Cloudflare Tunnel clients.
 
 ## Suggested API Contract
 

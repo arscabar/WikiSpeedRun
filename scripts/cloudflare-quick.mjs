@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { startServer } from "../server/index.mjs";
+import { cleanupWikiSpeedRunProcesses } from "../server/process-cleanup.mjs";
+import { setExternalShareLink, startServer } from "../server/index.mjs";
 
 const port = Number(process.env.WSR_PORT ?? process.env.WSR_API_PORT ?? 3002);
 const host = process.env.WSR_HOST ?? "127.0.0.1";
@@ -13,6 +14,8 @@ const smokeMs = Number(process.env.WSR_TUNNEL_SMOKE_MS ?? 0);
 if (!existsSync(distIndex)) {
   console.warn("[cloudflare] dist/index.html not found. Run npm run build before sharing.");
 }
+
+await cleanupWikiSpeedRunProcesses({ includeTunnel: true, log: true });
 
 console.log(`[app] starting WikiSpeedRun at ${serviceUrl}`);
 const server = await startServer({ port, host });
@@ -35,7 +38,9 @@ const maybePrintPublicUrl = (text) => {
   }
 
   publicUrl = match[0];
+  setExternalShareLink(publicUrl, "cloudflare");
   console.log(`[cloudflare] public URL: ${publicUrl}`);
+  console.log("[app] external share link updated inside WikiSpeedRun.");
   console.log("[cloudflare] press Ctrl+C to stop sharing.");
 };
 

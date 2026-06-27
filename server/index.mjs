@@ -5,14 +5,20 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupWikiSpeedRunProcesses } from "./process-cleanup.mjs";
 
 const NAMU_ORIGIN = "https://namu.wiki";
 const DEFAULT_PORT = Number(process.env.WSR_API_PORT ?? process.env.WSR_PORT ?? 3002);
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 const RANDOM_ATTEMPTS = 36;
+const LINKED_CHALLENGE_ATTEMPTS = 24;
+const LINK_CANDIDATE_SAMPLE_SIZE = 32;
 const MIN_START_LINKS = 8;
 const MIN_START_BLOCKS = 2;
-const MIN_TARGET_BLOCKS = 1;
+const MIN_TARGET_LINKS = 1;
+const MIN_TARGET_BLOCKS = 2;
+const MIN_INTERMEDIATE_LINKS = 4;
+const MIN_INTERMEDIATE_BLOCKS = 1;
 const MAX_RANKING_RECORDS = 200;
 const MAX_ROUTE_STEPS = 80;
 const VALID_MODES = new Set(["casual", "practice"]);
@@ -30,12 +36,18 @@ const app = express();
 const sessionStartedAt = new Date().toISOString();
 const players = new Map();
 const activeRuns = new Map();
+const shareLinkState = {
+  localUrl: "",
+  externalUrl: normalizeShareUrl(process.env.WSR_PUBLIC_URL ?? process.env.WIKI_SPEED_RUN_PUBLIC_URL ?? ""),
+  provider: process.env.WSR_PUBLIC_URL || process.env.WIKI_SPEED_RUN_PUBLIC_URL ? "env" : "",
+  updatedAt: process.env.WSR_PUBLIC_URL || process.env.WIKI_SPEED_RUN_PUBLIC_URL ? new Date().toISOString() : "",
+};
 let sessionRankings = [];
 
 app.use(express.json({ limit: "64kb" }));
 app.use((_, res, next) => {
   res.setHeader("access-control-allow-origin", "http://127.0.0.1:3001");
-  res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type");
   next();
 });
@@ -44,6 +56,37 @@ app.options(/.*/, (_, res) => res.sendStatus(204));
 
 app.get("/api/health", (_, res) => {
   res.json({ ok: true, service: "wiki-speed-run-local", port: DEFAULT_PORT });
+});
+
+app.get("/api/share-link", (_, res) => {
+  res.json(publicShareLinkState());
+});
+
+app.post("/api/share-link", (req, res) => {
+  if (!isLocalShareUpdateRequest(req)) {
+    res.status(403).json({ error: "local_update_only", message: "외부 링크 갱신은 로컬 터널 프로세스에서만 허용됩니다." });
+    return;
+  }
+
+  const externalUrl = normalizeShareUrl(req.body?.externalUrl ?? req.body?.url ?? "");
+
+  if (!externalUrl) {
+    res.status(400).json({ error: "invalid_external_url", message: "http 또는 https 외부 URL이 필요합니다." });
+    return;
+  }
+
+  setExternalShareLink(externalUrl, cleanProvider(req.body?.provider ?? "manual"));
+  res.json(publicShareLinkState());
+});
+
+app.delete("/api/share-link", (req, res) => {
+  if (!isLocalShareUpdateRequest(req)) {
+    res.status(403).json({ error: "local_update_only", message: "외부 링크 초기화는 로컬에서만 허용됩니다." });
+    return;
+  }
+
+  clearExternalShareLink();
+  res.json(publicShareLinkState());
 });
 
 app.get("/api/rankings", (_, res) => {
@@ -59,6 +102,15 @@ app.post("/api/rankings", (_, res) => {
     accepted: false,
     error: "rankings_are_server_authoritative",
     message: "랭킹은 서버 run 로그로만 생성됩니다.",
+  });
+});
+
+app.delete("/api/rankings", (_, res) => {
+  sessionRankings = [];
+  res.json({
+    sessionStartedAt,
+    total: 0,
+    records: sessionRankings,
   });
 });
 
@@ -204,6 +256,7 @@ app.get("/api/challenge", async (req, res) => {
         label: "테스트 제시어",
         generatedAt: new Date().toISOString(),
         source: "query-override",
+        verifiedClicks: startArticle.outgoingLinks.includes(requestedTarget) ? 1 : 0,
       };
 
       await appendChallengeLog(challenge);
@@ -211,23 +264,7 @@ app.get("/api/challenge", async (req, res) => {
       return;
     }
 
-    const target = await pickRandomDocument("", { minBlocks: MIN_TARGET_BLOCKS, minLinks: 0 });
-    const start = await pickRandomDocument(target.title, { minBlocks: MIN_START_BLOCKS, minLinks: MIN_START_LINKS });
-
-    const challenge = {
-      start: start.title,
-      target: target.title,
-      label:
-        mode === "wild"
-          ? "아예랜덤 제시어"
-          : mode === "practice"
-            ? "연습 제시어"
-            : mode === "casual"
-              ? "캐주얼 제시어"
-              : "자동 제시어",
-      generatedAt: new Date().toISOString(),
-      source: "namu.wiki/random",
-    };
+    const challenge = await createReachableChallenge(mode);
 
     await appendChallengeLog(challenge);
     res.json(challenge);
@@ -291,10 +328,89 @@ function startServer({ port = DEFAULT_PORT, host = "127.0.0.1" } = {}) {
       server.off("error", reject);
       const address = server.address();
       const boundPort = typeof address === "object" && address ? address.port : port;
+      setLocalShareLink(host, boundPort);
       console.log(`Wiki Speed Run local API listening on http://${host}:${boundPort}`);
       resolve(server);
     });
   });
+}
+
+function setLocalShareLink(host, port) {
+  const safeHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  shareLinkState.localUrl = `http://${safeHost}:${port}`;
+}
+
+function setExternalShareLink(externalUrl, provider = "manual") {
+  const normalizedUrl = normalizeShareUrl(externalUrl);
+
+  if (!normalizedUrl) {
+    return false;
+  }
+
+  shareLinkState.externalUrl = normalizedUrl;
+  shareLinkState.provider = cleanProvider(provider);
+  shareLinkState.updatedAt = new Date().toISOString();
+  return true;
+}
+
+function clearExternalShareLink() {
+  shareLinkState.externalUrl = "";
+  shareLinkState.provider = "";
+  shareLinkState.updatedAt = "";
+}
+
+function publicShareLinkState() {
+  return {
+    sessionStartedAt,
+    localUrl: shareLinkState.localUrl,
+    externalUrl: shareLinkState.externalUrl,
+    provider: shareLinkState.provider,
+    updatedAt: shareLinkState.updatedAt,
+    status: shareLinkState.externalUrl ? "external-online" : "local-only",
+  };
+}
+
+function normalizeShareUrl(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const cleanValue = value.trim();
+
+  if (!cleanValue) {
+    return "";
+  }
+
+  try {
+    const url = new URL(cleanValue);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return "";
+    }
+
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function cleanProvider(value) {
+  return String(value || "manual")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 32);
+}
+
+function isLocalShareUpdateRequest(req) {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const cloudflareIp = req.headers["cf-connecting-ip"];
+  const remoteAddress = req.socket.remoteAddress ?? "";
+
+  if (forwardedFor || cloudflareIp) {
+    return false;
+  }
+
+  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remoteAddress);
 }
 
 function mountStaticFiles(serverApp) {
@@ -311,13 +427,136 @@ function mountStaticFiles(serverApp) {
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun) {
-  startServer().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  cleanupWikiSpeedRunProcesses({ includeTunnel: true, log: true })
+    .then(() => startServer())
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }
 
-export { app, startServer };
+export { app, clearExternalShareLink, setExternalShareLink, startServer };
+
+async function createReachableChallenge(mode) {
+  let lastError = "";
+
+  for (let attempt = 0; attempt < LINKED_CHALLENGE_ATTEMPTS; attempt += 1) {
+    try {
+      const start = await pickRandomDocument("", { minBlocks: MIN_START_BLOCKS, minLinks: MIN_START_LINKS });
+      const route = await pickReachableRoute(start.title, mode);
+      const target = route[route.length - 1];
+
+      if (route.length < 2 || target === start.title) {
+        continue;
+      }
+
+      return {
+        start: start.title,
+        target,
+        label: getChallengeLabel(mode),
+        generatedAt: new Date().toISOString(),
+        source: "namu.wiki/random-walk",
+        verifiedClicks: route.length - 1,
+      };
+    } catch (error) {
+      lastError = getErrorMessage(error);
+    }
+  }
+
+  throw new Error(`Could not create a reachable challenge. ${lastError}`);
+}
+
+async function pickReachableRoute(startTitle, mode) {
+  const { min, max } = getChallengeDepthRange(mode);
+  const targetDepth = randomInteger(min, max);
+  const route = [startTitle];
+  const visited = new Set(route);
+  let currentTitle = startTitle;
+
+  for (let depth = 0; depth < targetDepth; depth += 1) {
+    const currentArticle = await getArticle(currentTitle);
+    const isTargetStep = depth === targetDepth - 1;
+    const nextArticle = await pickLinkedArticle(currentArticle, visited, {
+      minBlocks: isTargetStep ? MIN_TARGET_BLOCKS : MIN_INTERMEDIATE_BLOCKS,
+      minLinks: isTargetStep ? MIN_TARGET_LINKS : MIN_INTERMEDIATE_LINKS,
+    });
+
+    if (!nextArticle) {
+      throw new Error(`No playable linked article from ${currentArticle.title}`);
+    }
+
+    route.push(nextArticle.title);
+    visited.add(nextArticle.title);
+    currentTitle = nextArticle.title;
+  }
+
+  return route;
+}
+
+async function pickLinkedArticle(article, visited, constraints) {
+  const candidates = shuffleValues(
+    article.outgoingLinks
+      .map(normalizeTitle)
+      .filter((title) => title && title !== article.title && !visited.has(title) && isNormalDocumentTitle(title)),
+  ).slice(0, LINK_CANDIDATE_SAMPLE_SIZE);
+
+  for (const candidate of candidates) {
+    try {
+      const linkedArticle = await getArticle(candidate);
+
+      if (!visited.has(linkedArticle.title) && isPlayableArticle(linkedArticle, constraints)) {
+        return linkedArticle;
+      }
+    } catch {
+      // Skip broken, blocked, or unsupported links and try another body link.
+    }
+  }
+
+  return null;
+}
+
+function getChallengeDepthRange(mode) {
+  if (mode === "practice") {
+    return { min: 1, max: 2 };
+  }
+
+  if (mode === "wild") {
+    return { min: 2, max: 4 };
+  }
+
+  return { min: 2, max: 3 };
+}
+
+function getChallengeLabel(mode) {
+  if (mode === "wild") {
+    return "아예랜덤 경로보장 제시어";
+  }
+
+  if (mode === "practice") {
+    return "연습 경로보장 제시어";
+  }
+
+  if (mode === "casual") {
+    return "캐주얼 경로보장 제시어";
+  }
+
+  return "경로보장 제시어";
+}
+
+function randomInteger(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function shuffleValues(values) {
+  const output = [...values];
+
+  for (let index = output.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [output[index], output[swapIndex]] = [output[swapIndex], output[index]];
+  }
+
+  return output;
+}
 
 async function pickRandomDocument(exceptTitle, { minBlocks = 1, minLinks = 0 } = {}) {
   let lastTitle = "";
@@ -570,7 +809,7 @@ function isPlayableStartArticle(article) {
 }
 
 function isPlayableTargetArticle(article) {
-  return isPlayableArticle(article, { minBlocks: MIN_TARGET_BLOCKS, minLinks: 0 });
+  return isPlayableArticle(article, { minBlocks: MIN_TARGET_BLOCKS, minLinks: MIN_TARGET_LINKS });
 }
 
 function isPlayableArticle(article, { minBlocks, minLinks }) {
